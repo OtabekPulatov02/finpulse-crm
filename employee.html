@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Елена Крылова — Finpulse CRM</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="assets/css/base.css">
+  <link rel="stylesheet" href="assets/css/layout.css">
+  <link rel="stylesheet" href="assets/css/components.css">
+  <link rel="stylesheet" href="assets/css/pages.css">
+</head>
+<body>
+<div class="app">
+
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+      <div class="logo-mark">F</div>
+      <div class="logo-text">Finpulse <span>CRM</span></div>
+    </div>
+    <nav class="sidebar-nav">
+      <a class="nav-item" href="dashboard.html"><i data-lucide="layout-dashboard" class="icon"></i>Дашборд</a>
+      <a class="nav-item" href="tasks.html"><i data-lucide="list-todo" class="icon"></i>Задачи<span class="nav-count">37</span></a>
+      <a class="nav-item" href="clients.html"><i data-lucide="building-2" class="icon"></i>Клиенты</a>
+      <a class="nav-item active" href="employees.html"><i data-lucide="users" class="icon"></i>Сотрудники</a>
+      <a class="nav-item" href="analytics.html"><i data-lucide="bar-chart-3" class="icon"></i>Аналитика</a>
+      <a class="nav-item" href="settings.html" data-role-admin><i data-lucide="settings" class="icon"></i>Настройки</a>
+      <div class="nav-section">Интеграции</div>
+      <a class="nav-item" href="telegram.html"><i data-lucide="send" class="icon"></i>Telegram<span class="nav-count">4</span></a>
+    </nav>
+    <div class="sidebar-footer">
+      <a class="sidebar-user" href="employee.html">
+        <span class="avatar av-6">ЮИ</span>
+        <div class="sidebar-user-info">
+          <div class="name">Ибрагимова Юлдуз</div>
+          <div class="role">Главный бухгалтер · супер-админ</div>
+        </div>
+      </a>
+    </div>
+  </aside>
+  <div class="sidebar-overlay"></div>
+
+  <div class="main">
+    <header class="topbar">
+      <button class="topbar-burger" data-sidebar-toggle aria-label="Меню"><i data-lucide="menu" class="icon"></i></button>
+      <div class="topbar-search">
+        <i data-lucide="search" class="icon"></i>
+        <input type="text" placeholder="Поиск по клиентам, задачам, сотрудникам…">
+        <kbd>Ctrl K</kbd>
+      </div>
+      <div class="topbar-actions">
+        <div class="dropdown">
+          <button class="topbar-btn" data-dropdown-toggle data-tooltip="Уведомления" aria-label="Уведомления">
+            <i data-lucide="bell" class="icon"></i><span class="dot"></span>
+          </button>
+          <div class="dropdown-menu menu-wide">
+            <div class="dropdown-header">Уведомления</div>
+            <div class="notif-item">
+              <div class="notif-icon ic-blue"><i data-lucide="send" class="icon"></i></div>
+              <div><div class="notif-title">Новое обращение из Telegram: ООО «ТехноСфера»</div><div class="notif-time">5 минут назад</div></div>
+            </div>
+            <div class="notif-item">
+              <div class="notif-icon ic-red"><i data-lucide="alert-circle" class="icon"></i></div>
+              <div><div class="notif-title">Просрочена задача «Акт сверки — СтройГарант»</div><div class="notif-time">1 час назад</div></div>
+            </div>
+            <div class="dropdown-divider"></div>
+            <button class="dropdown-item" data-toast="info|Уведомления|Все уведомления отмечены прочитанными."><i data-lucide="check-check" class="icon"></i>Отметить всё прочитанным</button>
+          </div>
+        </div>
+        <div class="dropdown">
+          <button class="topbar-profile" data-dropdown-toggle>
+            <span class="avatar avatar-sm av-6">ЮИ</span>
+            <span class="profile-name fw-500">Юлдуз</span>
+            <i data-lucide="chevron-down" class="icon icon-sm text-muted"></i>
+          </button>
+          <div class="dropdown-menu">
+            <a class="dropdown-item" href="employee.html"><i data-lucide="user" class="icon"></i>Мой профиль</a>
+            <a class="dropdown-item" href="settings.html" data-role-admin><i data-lucide="settings" class="icon"></i>Настройки</a>
+            <div class="dropdown-divider"></div>
+            <a class="dropdown-item danger" href="login.html"><i data-lucide="log-out" class="icon"></i>Выйти</a>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <main class="page">
+      <nav class="breadcrumb" aria-label="Хлебные крошки">
+        <a href="dashboard.html">Главная</a><span class="sep">/</span>
+        <a href="employees.html">Сотрудники</a><span class="sep">/</span>
+        <span class="current">Крылова Елена Викторовна</span>
+      </nav>
+
+      <section class="card mb-16">
+        <div class="entity-header">
+          <span class="avatar avatar-xl av-1">ЕК</span>
+          <div class="entity-info">
+            <h1>Крылова Елена Викторовна <span class="badge badge-green">В штате</span></h1>
+            <div class="entity-meta">
+              <span><i data-lucide="briefcase" class="icon"></i>Ведущий бухгалтер</span>
+              <span><i data-lucide="mail" class="icon"></i>e.krylova@finpulse.ru</span>
+              <span><i data-lucide="phone" class="icon"></i>+7 (916) 240-18-93</span>
+              <span><i data-lucide="calendar" class="icon"></i>В компании с 2019 года</span>
+            </div>
+          </div>
+          <div class="entity-actions">
+            <button class="btn btn-primary" data-modal-open="modal-create-task"><i data-lucide="plus" class="icon"></i>Назначить задачу</button>
+            <button class="btn btn-secondary" data-role-admin data-modal-open="modal-create-employee"><i data-lucide="pencil" class="icon"></i>Редактировать</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="stat-grid">
+        <div class="card kpi-card">
+          <div class="kpi-top"><span class="kpi-label">Загрузка</span><span class="kpi-icon ic-yellow"><i data-lucide="gauge" class="icon"></i></span></div>
+          <div class="kpi-value">85%</div>
+          <div class="progress"><div class="progress-bar yellow" style="width:85%"></div></div>
+        </div>
+        <div class="card kpi-card">
+          <div class="kpi-top"><span class="kpi-label">Клиенты</span><span class="kpi-icon ic-blue"><i data-lucide="building-2" class="icon"></i></span></div>
+          <div class="kpi-value">12</div>
+          <div class="kpi-trend">ответственный бухгалтер</div>
+        </div>
+        <div class="card kpi-card">
+          <div class="kpi-top"><span class="kpi-label">Активные задачи</span><span class="kpi-icon ic-purple"><i data-lucide="list-todo" class="icon"></i></span></div>
+          <div class="kpi-value">9</div>
+          <div class="kpi-trend">2 с высоким приоритетом</div>
+        </div>
+        <div class="card kpi-card">
+          <div class="kpi-top"><span class="kpi-label">Выполненные задачи</span><span class="kpi-icon ic-green"><i data-lucide="check-circle" class="icon"></i></span></div>
+          <div class="kpi-value">156</div>
+          <div class="kpi-trend"><span class="up"><i data-lucide="arrow-up-right" class="icon"></i>+18</span> за месяц</div>
+        </div>
+      </section>
+
+      <div class="tabs" data-tabs="employee">
+        <button class="tab-btn active" data-tab-target="tab-emp-clients"><i data-lucide="building-2" class="icon icon-sm"></i>Клиенты<span class="count">12</span></button>
+        <button class="tab-btn" data-tab-target="tab-emp-active"><i data-lucide="list-todo" class="icon icon-sm"></i>Активные задачи<span class="count">9</span></button>
+        <button class="tab-btn" data-tab-target="tab-emp-done"><i data-lucide="check-circle" class="icon icon-sm"></i>Выполненные<span class="count">156</span></button>
+      </div>
+
+      <div class="tab-panel active" id="tab-emp-clients" data-tab-scope="employee">
+        <section class="card">
+          <div class="table-wrap">
+            <table class="table">
+              <thead><tr><th>Компания</th><th>Система налогообложения</th><th>Статус</th><th>Активные задачи</th><th></th></tr></thead>
+              <tbody>
+                <tr class="clickable" onclick="window.location.href='client.html'">
+                  <td><div class="cell-main">ООО «ТехноСфера»</div><div class="cell-sub">ИНН 7701234567</div></td>
+                  <td>УСН (доходы − расходы)</td>
+                  <td><span class="badge badge-green">Активный</span></td>
+                  <td class="fw-600">6</td>
+                  <td><i data-lucide="chevron-right" class="icon text-muted"></i></td>
+                </tr>
+                <tr class="clickable" onclick="window.location.href='client.html'">
+                  <td><div class="cell-main">ООО «МедФарм»</div><div class="cell-sub">ИНН 7716009843</div></td>
+                  <td>УСН (доходы)</td>
+                  <td><span class="badge badge-green">Активный</span></td>
+                  <td class="fw-600">4</td>
+                  <td><i data-lucide="chevron-right" class="icon text-muted"></i></td>
+                </tr>
+                <tr class="clickable" onclick="window.location.href='client.html'">
+                  <td><div class="cell-main">ООО «АгроТрейд»</div><div class="cell-sub">ИНН 5040112233</div></td>
+                  <td>ЕСХН</td>
+                  <td><span class="badge badge-blue">Новый</span></td>
+                  <td class="fw-600">1</td>
+                  <td><i data-lucide="chevron-right" class="icon text-muted"></i></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+
+      <div class="tab-panel" id="tab-emp-active" data-tab-scope="employee">
+        <section class="card">
+          <div class="table-wrap">
+            <table class="table">
+              <thead><tr><th>Задача</th><th>Клиент</th><th>Статус</th><th>Приоритет</th><th>Дедлайн</th></tr></thead>
+              <tbody>
+                <tr class="clickable" onclick="window.location.href='task.html'">
+                  <td class="cell-main">Подготовить декларацию по НДС за II квартал</td>
+                  <td>ООО «ТехноСфера»</td>
+                  <td><span class="badge badge-blue">В работе</span></td>
+                  <td><span class="badge badge-yellow">Высокий</span></td>
+                  <td>25.07.2026</td>
+                </tr>
+                <tr class="clickable" onclick="window.location.href='task.html'">
+                  <td class="cell-main">Ответ на требование ИФНС № 14-08/2214</td>
+                  <td>ООО «ТехноСфера»</td>
+                  <td><span class="badge badge-purple">Новая</span></td>
+                  <td><span class="badge badge-red">Критический</span></td>
+                  <td class="text-danger fw-500">10.07.2026</td>
+                </tr>
+                <tr class="clickable" onclick="window.location.href='task.html'">
+                  <td class="cell-main">Книга доходов и расходов за полугодие</td>
+                  <td>ООО «МедФарм»</td>
+                  <td><span class="badge badge-yellow">Ожидание</span></td>
+                  <td><span class="badge badge-blue">Средний</span></td>
+                  <td>31.07.2026</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+
+      <div class="tab-panel" id="tab-emp-done" data-tab-scope="employee">
+        <section class="card">
+          <div class="table-wrap">
+            <table class="table">
+              <thead><tr><th>Задача</th><th>Клиент</th><th>Выполнена</th><th>Затрачено</th></tr></thead>
+              <tbody>
+                <tr>
+                  <td class="cell-main">6-НДФЛ за полугодие</td>
+                  <td>ООО «МедФарм»</td>
+                  <td>03.07.2026</td>
+                  <td>2 дня</td>
+                </tr>
+                <tr>
+                  <td class="cell-main">Авансовый платёж по УСН</td>
+                  <td>ООО «АгроТрейд»</td>
+                  <td>30.06.2026</td>
+                  <td>1 день</td>
+                </tr>
+                <tr>
+                  <td class="cell-main">Сверка с поставщиками за июнь</td>
+                  <td>ООО «ТехноСфера»</td>
+                  <td>28.06.2026</td>
+                  <td>3 дня</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="pagination">
+            <span class="pagination-info">Показано 1–3 из 156 задач</span>
+            <div class="pagination-pages">
+              <button class="page-btn" disabled aria-label="Назад"><i data-lucide="chevron-left" class="icon"></i></button>
+              <button class="page-btn active" data-page="1">1</button>
+              <button class="page-btn" data-page="2">2</button>
+              <button class="page-btn" data-page="3">3</button>
+              <button class="page-btn" data-page="2" aria-label="Вперёд"><i data-lucide="chevron-right" class="icon"></i></button>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+</div>
+
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+<script src="assets/js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Telegram — Finpulse CRM</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="assets/css/base.css">
+  <link rel="stylesheet" href="assets/css/layout.css">
+  <link rel="stylesheet" href="assets/css/components.css">
+  <link rel="stylesheet" href="assets/css/pages.css">
+</head>
+<body>
+<div class="app">
+
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+      <div class="logo-mark">F</div>
+      <div class="logo-text">Finpulse <span>CRM</span></div>
+    </div>
+    <nav class="sidebar-nav">
+      <a class="nav-item" href="dashboard.html"><i data-lucide="layout-dashboard" class="icon"></i>Дашборд</a>
+      <a class="nav-item" href="tasks.html"><i data-lucide="list-todo" class="icon"></i>Задачи<span class="nav-count">37</span></a>
+      <a class="nav-item" href="clients.html"><i data-lucide="building-2" class="icon"></i>Клиенты</a>
+      <a class="nav-item" href="employees.html"><i data-lucide="users" class="icon"></i>Сотрудники</a>
+      <a class="nav-item" href="analytics.html"><i data-lucide="bar-chart-3" class="icon"></i>Аналитика</a>
+      <a class="nav-item" href="settings.html" data-role-admin><i data-lucide="settings" class="icon"></i>Настройки</a>
+      <div class="nav-section">Интеграции</div>
+      <a class="nav-item active" href="telegram.html"><i data-lucide="send" class="icon"></i>Telegram<span class="nav-count">4</span></a>
+    </nav>
+    <div class="sidebar-footer">
+      <a class="sidebar-user" href="employee.html">
+        <span class="avatar av-6">ЮИ</span>
+        <div class="sidebar-user-info">
+          <div class="name">Ибрагимова Юлдуз</div>
+          <div class="role">Главный бухгалтер · супер-админ</div>
+        </div>
+      </a>
+    </div>
+  </aside>
+  <div class="sidebar-overlay"></div>
+
+  <div class="main">
+    <header class="topbar">
+      <button class="topbar-burger" data-sidebar-toggle aria-label="Меню"><i data-lucide="menu" class="icon"></i></button>
+      <div class="topbar-search">
+        <i data-lucide="search" class="icon"></i>
+        <input type="text" placeholder="Поиск по клиентам, задачам, сотрудникам…">
+        <kbd>Ctrl K</kbd>
+      </div>
+      <div class="topbar-actions">
+        <div class="dropdown">
+          <button class="topbar-btn" data-dropdown-toggle data-tooltip="Уведомления" aria-label="Уведомления">
+            <i data-lucide="bell" class="icon"></i><span class="dot"></span>
+          </button>
+          <div class="dropdown-menu menu-wide">
+            <div class="dropdown-header">Уведомления</div>
+            <div class="notif-item">
+              <div class="notif-icon ic-blue"><i data-lucide="send" class="icon"></i></div>
+              <div><div class="notif-title">Новое обращение из Telegram: ООО «ТехноСфера»</div><div class="notif-time">5 минут назад</div></div>
+            </div>
+            <div class="notif-item">
+              <div class="notif-icon ic-red"><i data-lucide="alert-circle" class="icon"></i></div>
+              <div><div class="notif-title">Просрочена задача «Акт сверки — СтройГарант»</div><div class="notif-time">1 час назад</div></div>
+            </div>
+            <div class="dropdown-divider"></div>
+            <button class="dropdown-item" data-toast="info|Уведомления|Все уведомления отмечены прочитанными."><i data-lucide="check-check" class="icon"></i>Отметить всё прочитанным</button>
+          </div>
+        </div>
+        <div class="dropdown">
+          <button class="topbar-profile" data-dropdown-toggle>
+            <span class="avatar avatar-sm av-6">ЮИ</span>
+            <span class="profile-name fw-500">Юлдуз</span>
+            <i data-lucide="chevron-down" class="icon icon-sm text-muted"></i>
+          </button>
+          <div class="dropdown-menu">
+            <a class="dropdown-item" href="employee.html"><i data-lucide="user" class="icon"></i>Мой профиль</a>
+            <a class="dropdown-item" href="settings.html" data-role-admin><i data-lucide="settings" class="icon"></i>Настройки</a>
+            <div class="dropdown-divider"></div>
+            <a class="dropdown-item danger" href="login.html"><i data-lucide="log-out" class="icon"></i>Выйти</a>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <main class="page">
+      <div class="page-header">
+        <div>
+          <h1>Интеграция с Telegram</h1>
+          <p class="subtitle">Демонстрация: обращение клиента автоматически превращается в задачу</p>
+        </div>
+        <div class="page-header-actions">
+          <button class="btn btn-secondary" data-modal-open="modal-distribution"><i data-lucide="settings-2" class="icon"></i>Правила распределения</button>
+          <button class="btn btn-primary" id="tg-play"><i data-lucide="play" class="icon"></i>Запустить демо</button>
+        </div>
+      </div>
+
+      <!-- Шаги потока -->
+      <section class="tg-flow">
+        <div class="card tg-step">
+          <div class="step-num">1</div>
+          <h3>Сообщение клиента</h3>
+          <p>Клиент пишет в Telegram-бот компании. Сообщение и вложения попадают в систему.</p>
+        </div>
+        <div class="card tg-step">
+          <div class="step-num">2</div>
+          <h3>Создание задачи</h3>
+          <p>Система создаёт задачу, привязывает её к карточке клиента и прикрепляет файлы.</p>
+        </div>
+        <div class="card tg-step">
+          <div class="step-num">3</div>
+          <h3>Автораспределение</h3>
+          <p>По правилам распределения задача назначается ответственному бухгалтеру клиента.</p>
+        </div>
+        <div class="card tg-step">
+          <div class="step-num">4</div>
+          <h3>Уведомление бухгалтеру</h3>
+          <p>Исполнитель получает уведомление в системе и в Telegram, клиенту уходит подтверждение.</p>
+        </div>
+      </section>
+
+      <div class="tg-demo-grid">
+        <!-- Телефон -->
+        <div class="phone">
+          <div class="phone-header">
+            <span class="avatar avatar-sm" style="background:#2AABEE;"><i data-lucide="send" class="icon icon-sm"></i></span>
+            <div>
+              <div class="ph-name">Finpulse · Бухгалтерия (бот)</div>
+              <div class="ph-status">онлайн</div>
+            </div>
+          </div>
+          <div class="phone-body" id="tg-chat">
+            <div class="chat-msg out">Здравствуйте! Это бот бухгалтерии «Finpulse». Напишите ваш вопрос — мы создадим задачу и назначим специалиста.<span class="msg-time">13:58</span></div>
+          </div>
+        </div>
+
+        <!-- Что происходит в системе -->
+        <section class="card">
+          <div class="card-header">
+            <h2>Что происходит в системе</h2>
+            <span class="badge badge-gray no-dot">события демо</span>
+          </div>
+          <div class="card-body">
+            <div class="timeline" id="tg-events">
+              <div class="timeline-item hidden">
+                <div class="tl-icon ic-blue"><i data-lucide="file-plus-2" class="icon"></i></div>
+                <div class="tl-body">
+                  <div class="tl-text">Создана задача <b>№ 1247 «Требование ИФНС по НДС»</b> для клиента <a href="client.html">ООО «ТехноСфера»</a>, вложение прикреплено</div>
+                  <div class="tl-time">14:02:11</div>
+                </div>
+              </div>
+              <div class="timeline-item hidden">
+                <div class="tl-icon ic-purple"><i data-lucide="user-check" class="icon"></i></div>
+                <div class="tl-body">
+                  <div class="tl-text">Правило «Telegram → ответственный бухгалтер»: исполнителем назначена <b>Елена Крылова</b>, приоритет <b>Средний</b>, срок <b>2 рабочих дня</b></div>
+                  <div class="tl-time">14:02:12</div>
+                </div>
+              </div>
+              <div class="timeline-item hidden">
+                <div class="tl-icon ic-green"><i data-lucide="bell-ring" class="icon"></i></div>
+                <div class="tl-body">
+                  <div class="tl-text">Уведомление отправлено <b>Елене Крыловой</b> (система + Telegram), клиент получил подтверждение с номером задачи</div>
+                  <div class="tl-time">14:02:13</div>
+                </div>
+              </div>
+            </div>
+            <div class="empty-state" id="tg-empty" style="padding:32px 20px;">
+              <div class="es-icon"><i data-lucide="circle-play" class="icon"></i></div>
+              <h3>Демонстрация не запущена</h3>
+              <p>Нажмите «Запустить демо», чтобы увидеть полный путь обращения: сообщение → задача → автораспределение → уведомление.</p>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- Последние обращения -->
+      <section class="card mt-24">
+        <div class="card-header">
+          <h2>Последние обращения из Telegram</h2>
+          <span class="badge badge-blue">4 новых</span>
+        </div>
+        <div class="table-wrap">
+          <table class="table">
+            <thead><tr><th>Клиент</th><th>Сообщение</th><th>Получено</th><th>Статус</th><th></th></tr></thead>
+            <tbody>
+              <tr>
+                <td><div class="cell-user"><span class="avatar avatar-sm av-3">ТС</span>ООО «ТехноСфера»</div></td>
+                <td class="text-secondary">Пришло требование из налоговой по НДС, нужна помощь до пятницы…</td>
+                <td>сегодня, 14:02</td>
+                <td><span class="badge badge-green">Задача создана</span></td>
+                <td><a class="btn btn-ghost btn-sm" href="task.html">Открыть задачу</a></td>
+              </tr>
+              <tr>
+                <td><div class="cell-user"><span class="avatar avatar-sm av-4">МФ</span>ООО «МедФарм»</div></td>
+                <td class="text-secondary">Нужен акт сверки с поставщиком «ФармОпт» за первое полугодие.</td>
+                <td>сегодня, 12:47</td>
+                <td><span class="badge badge-green">Задача создана</span></td>
+                <td><a class="btn btn-ghost btn-sm" href="task.html">Открыть задачу</a></td>
+              </tr>
+              <tr>
+                <td><div class="cell-user"><span class="avatar avatar-sm av-7">ЛГ</span>ООО «Логистик Групп»</div></td>
+                <td class="text-secondary">Какие документы нужны для приёма нового сотрудника с 15 июля?</td>
+                <td>сегодня, 09:15</td>
+                <td><span class="badge badge-purple">Новое</span></td>
+                <td><button class="btn btn-secondary btn-sm" data-modal-open="modal-create-task">Создать задачу</button></td>
+              </tr>
+              <tr>
+                <td><div class="cell-user"><span class="avatar avatar-sm av-6">ВП</span>АО «ВекторПлюс»</div></td>
+                <td class="text-secondary">Подтвердите, пожалуйста, получение банковской выписки за июнь.</td>
+                <td>вчера, 18:30</td>
+                <td><span class="badge badge-purple">Новое</span></td>
+                <td><button class="btn btn-secondary btn-sm" data-modal-open="modal-create-task">Создать задачу</button></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>
+
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+<script src="assets/js/app.js"></script>
+<script>
+  // Скрываем заглушку при запуске демо (только для этой страницы)
+  document.addEventListener("DOMContentLoaded", function () {
+    var play = document.getElementById("tg-play");
+    var empty = document.getElementById("tg-empty");
+    if (play && empty) play.addEventListener("click", function () { empty.classList.add("hidden"); });
+  });
+</script>
+</body>
+</html>

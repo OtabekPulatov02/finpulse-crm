@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Сотрудники — Finpulse CRM</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="assets/css/base.css">
+  <link rel="stylesheet" href="assets/css/layout.css">
+  <link rel="stylesheet" href="assets/css/components.css">
+  <link rel="stylesheet" href="assets/css/pages.css">
+</head>
+<body>
+<div class="app">
+
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+      <div class="logo-mark">F</div>
+      <div class="logo-text">Finpulse <span>CRM</span></div>
+    </div>
+    <nav class="sidebar-nav">
+      <a class="nav-item" href="dashboard.html"><i data-lucide="layout-dashboard" class="icon"></i>Дашборд</a>
+      <a class="nav-item" href="tasks.html"><i data-lucide="list-todo" class="icon"></i>Задачи<span class="nav-count">37</span></a>
+      <a class="nav-item" href="clients.html"><i data-lucide="building-2" class="icon"></i>Клиенты</a>
+      <a class="nav-item active" href="employees.html"><i data-lucide="users" class="icon"></i>Сотрудники</a>
+      <a class="nav-item" href="analytics.html"><i data-lucide="bar-chart-3" class="icon"></i>Аналитика</a>
+      <a class="nav-item" href="settings.html" data-role-admin><i data-lucide="settings" class="icon"></i>Настройки</a>
+      <div class="nav-section">Интеграции</div>
+      <a class="nav-item" href="telegram.html"><i data-lucide="send" class="icon"></i>Telegram<span class="nav-count">4</span></a>
+    </nav>
+    <div class="sidebar-footer">
+      <a class="sidebar-user" href="employee.html">
+        <span class="avatar av-6">ЮИ</span>
+        <div class="sidebar-user-info">
+          <div class="name">Ибрагимова Юлдуз</div>
+          <div class="role">Главный бухгалтер · супер-админ</div>
+        </div>
+      </a>
+    </div>
+  </aside>
+  <div class="sidebar-overlay"></div>
+
+  <div class="main">
+    <header class="topbar">
+      <button class="topbar-burger" data-sidebar-toggle aria-label="Меню"><i data-lucide="menu" class="icon"></i></button>
+      <div class="topbar-search">
+        <i data-lucide="search" class="icon"></i>
+        <input type="text" placeholder="Поиск по клиентам, задачам, сотрудникам…">
+        <kbd>Ctrl K</kbd>
+      </div>
+      <div class="topbar-actions">
+        <div class="dropdown">
+          <button class="topbar-btn" data-dropdown-toggle data-tooltip="Уведомления" aria-label="Уведомления">
+            <i data-lucide="bell" class="icon"></i><span class="dot"></span>
+          </button>
+          <div class="dropdown-menu menu-wide">
+            <div class="dropdown-header">Уведомления</div>
+            <div class="notif-item">
+              <div class="notif-icon ic-blue"><i data-lucide="send" class="icon"></i></div>
+              <div><div class="notif-title">Новое обращение из Telegram: ООО «ТехноСфера»</div><div class="notif-time">5 минут назад</div></div>
+            </div>
+            <div class="notif-item">
+              <div class="notif-icon ic-red"><i data-lucide="alert-circle" class="icon"></i></div>
+              <div><div class="notif-title">Просрочена задача «Акт сверки — СтройГарант»</div><div class="notif-time">1 час назад</div></div>
+            </div>
+            <div class="dropdown-divider"></div>
+            <button class="dropdown-item" data-toast="info|Уведомления|Все уведомления отмечены прочитанными."><i data-lucide="check-check" class="icon"></i>Отметить всё прочитанным</button>
+          </div>
+        </div>
+        <div class="dropdown">
+          <button class="topbar-profile" data-dropdown-toggle>
+            <span class="avatar avatar-sm av-6">ЮИ</span>
+            <span class="profile-name fw-500">Юлдуз</span>
+            <i data-lucide="chevron-down" class="icon icon-sm text-muted"></i>
+          </button>
+          <div class="dropdown-menu">
+            <a class="dropdown-item" href="employee.html"><i data-lucide="user" class="icon"></i>Мой профиль</a>
+            <a class="dropdown-item" href="settings.html" data-role-admin><i data-lucide="settings" class="icon"></i>Настройки</a>
+            <div class="dropdown-divider"></div>
+            <a class="dropdown-item danger" href="login.html"><i data-lucide="log-out" class="icon"></i>Выйти</a>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <main class="page">
+      <div class="page-header">
+        <div>
+          <h1>Сотрудники</h1>
+          <p class="subtitle">6 сотрудников · средняя загрузка 67%</p>
+        </div>
+        <div class="page-header-actions">
+          <button class="btn btn-primary" data-role-admin data-modal-open="modal-create-employee"><i data-lucide="user-plus" class="icon"></i>Добавить сотрудника</button>
+        </div>
+      </div>
+
+      <section class="emp-grid">
+        <a class="card emp-card card-hover" href="employee.html">
+          <div class="emp-head">
+            <span class="avatar avatar-lg av-6">ЮИ</span>
+            <div>
+              <div class="emp-name">Ибрагимова Юлдуз Ахмедовна</div>
+              <div class="emp-role">Главный бухгалтер · супер-админ</div>
+            </div>
+          </div>
+          <div class="progress-row">
+            <div class="progress"><div class="progress-bar" style="width:62%"></div></div>
+            <span class="progress-value">62%</span>
+          </div>
+          <div class="emp-stats">
+            <div><div class="num">8</div><div class="lbl">Клиенты</div></div>
+            <div><div class="num">6</div><div class="lbl">Активные</div></div>
+            <div><div class="num">214</div><div class="lbl">Выполнено</div></div>
+          </div>
+        </a>
+
+        <a class="card emp-card card-hover" href="employee.html">
+          <div class="emp-head">
+            <span class="avatar avatar-lg av-1">ЕК</span>
+            <div>
+              <div class="emp-name">Крылова Елена Викторовна</div>
+              <div class="emp-role">Ведущий бухгалтер</div>
+            </div>
+          </div>
+          <div class="progress-row">
+            <div class="progress"><div class="progress-bar yellow" style="width:85%"></div></div>
+            <span class="progress-value">85%</span>
+          </div>
+          <div class="emp-stats">
+            <div><div class="num">12</div><div class="lbl">Клиенты</div></div>
+            <div><div class="num">9</div><div class="lbl">Активные</div></div>
+            <div><div class="num">156</div><div class="lbl">Выполнено</div></div>
+          </div>
+        </a>
+
+        <a class="card emp-card card-hover" href="employee.html">
+          <div class="emp-head">
+            <span class="avatar avatar-lg av-2">ДО</span>
+            <div>
+              <div class="emp-name">Орлов Дмитрий Андреевич</div>
+              <div class="emp-role">Бухгалтер</div>
+            </div>
+          </div>
+          <div class="progress-row">
+            <div class="progress"><div class="progress-bar" style="width:64%"></div></div>
+            <span class="progress-value">64%</span>
+          </div>
+          <div class="emp-stats">
+            <div><div class="num">10</div><div class="lbl">Клиенты</div></div>
+            <div><div class="num">8</div><div class="lbl">Активные</div></div>
+            <div><div class="num">118</div><div class="lbl">Выполнено</div></div>
+          </div>
+        </a>
+
+        <a class="card emp-card card-hover" href="employee.html">
+          <div class="emp-head">
+            <span class="avatar avatar-lg av-3">АС</span>
+            <div>
+              <div class="emp-name">Смирнова Анна Павловна</div>
+              <div class="emp-role">Бухгалтер по зарплате</div>
+            </div>
+          </div>
+          <div class="progress-row">
+            <div class="progress"><div class="progress-bar red" style="width:92%"></div></div>
+            <span class="progress-value">92%</span>
+          </div>
+          <div class="emp-stats">
+            <div><div class="num">14</div><div class="lbl">Клиенты</div></div>
+            <div><div class="num">11</div><div class="lbl">Активные</div></div>
+            <div><div class="num">203</div><div class="lbl">Выполнено</div></div>
+          </div>
+        </a>
+
+        <a class="card emp-card card-hover" href="employee.html">
+          <div class="emp-head">
+            <span class="avatar avatar-lg av-4">ИВ</span>
+            <div>
+              <div class="emp-name">Васильев Игорь Максимович</div>
+              <div class="emp-role">Младший бухгалтер</div>
+            </div>
+          </div>
+          <div class="progress-row">
+            <div class="progress"><div class="progress-bar green" style="width:41%"></div></div>
+            <span class="progress-value">41%</span>
+          </div>
+          <div class="emp-stats">
+            <div><div class="num">6</div><div class="lbl">Клиенты</div></div>
+            <div><div class="num">4</div><div class="lbl">Активные</div></div>
+            <div><div class="num">47</div><div class="lbl">Выполнено</div></div>
+          </div>
+        </a>
+
+        <a class="card emp-card card-hover" href="employee.html">
+          <div class="emp-head">
+            <span class="avatar avatar-lg av-5">ОН</span>
+            <div>
+              <div class="emp-name">Никитина Ольга Сергеевна</div>
+              <div class="emp-role">Налоговый консультант</div>
+            </div>
+          </div>
+          <div class="progress-row">
+            <div class="progress"><div class="progress-bar" style="width:58%"></div></div>
+            <span class="progress-value">58%</span>
+          </div>
+          <div class="emp-stats">
+            <div><div class="num">6</div><div class="lbl">Клиенты</div></div>
+            <div><div class="num">5</div><div class="lbl">Активные</div></div>
+            <div><div class="num">89</div><div class="lbl">Выполнено</div></div>
+          </div>
+        </a>
+
+        <button class="card emp-card card-hover" style="border-style:dashed; align-items:center; justify-content:center; min-height:180px; background:transparent; color:var(--text-secondary); font-size:13.5px; font-weight:500;" data-role-admin data-modal-open="modal-create-employee">
+          <i data-lucide="user-plus" class="icon icon-lg" style="color:var(--text-muted);"></i>
+          Добавить сотрудника
+        </button>
+      </section>
+    </main>
+  </div>
+</div>
+
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+<script src="assets/js/app.js"></script>
+</body>
+</html>

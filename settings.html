@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Настройки — Finpulse CRM</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="assets/css/base.css">
+  <link rel="stylesheet" href="assets/css/layout.css">
+  <link rel="stylesheet" href="assets/css/components.css">
+  <link rel="stylesheet" href="assets/css/pages.css">
+</head>
+<body>
+<div class="app">
+
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+      <div class="logo-mark">F</div>
+      <div class="logo-text">Finpulse <span>CRM</span></div>
+    </div>
+    <nav class="sidebar-nav">
+      <a class="nav-item" href="dashboard.html"><i data-lucide="layout-dashboard" class="icon"></i>Дашборд</a>
+      <a class="nav-item" href="tasks.html"><i data-lucide="list-todo" class="icon"></i>Задачи<span class="nav-count">37</span></a>
+      <a class="nav-item" href="clients.html"><i data-lucide="building-2" class="icon"></i>Клиенты</a>
+      <a class="nav-item" href="employees.html"><i data-lucide="users" class="icon"></i>Сотрудники</a>
+      <a class="nav-item" href="analytics.html"><i data-lucide="bar-chart-3" class="icon"></i>Аналитика</a>
+      <a class="nav-item active" href="settings.html" data-role-admin><i data-lucide="settings" class="icon"></i>Настройки</a>
+      <div class="nav-section">Интеграции</div>
+      <a class="nav-item" href="telegram.html"><i data-lucide="send" class="icon"></i>Telegram<span class="nav-count">4</span></a>
+    </nav>
+    <div class="sidebar-footer">
+      <a class="sidebar-user" href="employee.html">
+        <span class="avatar av-6">ЮИ</span>
+        <div class="sidebar-user-info">
+          <div class="name">Ибрагимова Юлдуз</div>
+          <div class="role">Главный бухгалтер · супер-админ</div>
+        </div>
+      </a>
+    </div>
+  </aside>
+  <div class="sidebar-overlay"></div>
+
+  <div class="main">
+    <header class="topbar">
+      <button class="topbar-burger" data-sidebar-toggle aria-label="Меню"><i data-lucide="menu" class="icon"></i></button>
+      <div class="topbar-search">
+        <i data-lucide="search" class="icon"></i>
+        <input type="text" placeholder="Поиск по клиентам, задачам, сотрудникам…">
+        <kbd>Ctrl K</kbd>
+      </div>
+      <div class="topbar-actions">
+        <div class="dropdown">
+          <button class="topbar-btn" data-dropdown-toggle data-tooltip="Уведомления" aria-label="Уведомления">
+            <i data-lucide="bell" class="icon"></i><span class="dot"></span>
+          </button>
+          <div class="dropdown-menu menu-wide">
+            <div class="dropdown-header">Уведомления</div>
+            <div class="notif-item">
+              <div class="notif-icon ic-blue"><i data-lucide="send" class="icon"></i></div>
+              <div><div class="notif-title">Новое обращение из Telegram: ООО «ТехноСфера»</div><div class="notif-time">5 минут назад</div></div>
+            </div>
+            <div class="notif-item">
+              <div class="notif-icon ic-red"><i data-lucide="alert-circle" class="icon"></i></div>
+              <div><div class="notif-title">Просрочена задача «Акт сверки — СтройГарант»</div><div class="notif-time">1 час назад</div></div>
+            </div>
+            <div class="dropdown-divider"></div>
+            <button class="dropdown-item" data-toast="info|Уведомления|Все уведомления отмечены прочитанными."><i data-lucide="check-check" class="icon"></i>Отметить всё прочитанным</button>
+          </div>
+        </div>
+        <div class="dropdown">
+          <button class="topbar-profile" data-dropdown-toggle>
+            <span class="avatar avatar-sm av-6">ЮИ</span>
+            <span class="profile-name fw-500">Юлдуз</span>
+            <i data-lucide="chevron-down" class="icon icon-sm text-muted"></i>
+          </button>
+          <div class="dropdown-menu">
+            <a class="dropdown-item" href="employee.html"><i data-lucide="user" class="icon"></i>Мой профиль</a>
+            <a class="dropdown-item" href="settings.html" data-role-admin><i data-lucide="settings" class="icon"></i>Настройки</a>
+            <div class="dropdown-divider"></div>
+            <a class="dropdown-item danger" href="login.html"><i data-lucide="log-out" class="icon"></i>Выйти</a>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <main class="page admin-page">
+      <div class="restricted-note">
+        <section class="card">
+          <div class="empty-state">
+            <div class="es-icon"><i data-lucide="lock" class="icon"></i></div>
+            <h3>Доступ ограничен</h3>
+            <p>Раздел «Настройки» доступен только супер-администратору системы — Ибрагимовой Юлдуз Ахмедовне. Обратитесь к ней для изменения ролей, статусов и правил распределения.</p>
+            <a href="dashboard.html" class="btn btn-primary"><i data-lucide="layout-dashboard" class="icon"></i>Вернуться на дашборд</a>
+          </div>
+        </section>
+      </div>
+      <div class="page-header">
+        <div>
+          <h1>Настройки</h1>
+          <p class="subtitle">Пользователи, роли, статусы, автораспределение и уведомления</p>
+        </div>
+      </div>
+
+      <div class="tabs" data-tabs="settings">
+        <button class="tab-btn active" data-tab-target="tab-users"><i data-lucide="users" class="icon icon-sm"></i>Пользователи</button>
+        <button class="tab-btn" data-tab-target="tab-roles"><i data-lucide="shield" class="icon icon-sm"></i>Роли</button>
+        <button class="tab-btn" data-tab-target="tab-statuses"><i data-lucide="tags" class="icon icon-sm"></i>Статусы</button>
+        <button class="tab-btn" data-tab-target="tab-rules"><i data-lucide="git-branch" class="icon icon-sm"></i>Правила распределения</button>
+        <button class="tab-btn" data-tab-target="tab-notifications"><i data-lucide="bell" class="icon icon-sm"></i>Уведомления</button>
+      </div>
+
+      <!-- Пользователи -->
+      <div class="tab-panel active" id="tab-users" data-tab-scope="settings">
+        <section class="card">
+          <div class="toolbar">
+            <div class="input-icon-wrap">
+              <i data-lucide="search" class="icon"></i>
+              <input type="text" class="input" placeholder="Поиск пользователя" data-table-search="users-table">
+            </div>
+            <div class="toolbar-spacer"></div>
+            <button class="btn btn-primary btn-sm" data-modal-open="modal-create-employee"><i data-lucide="user-plus" class="icon"></i>Добавить пользователя</button>
+          </div>
+          <div class="table-wrap">
+            <table class="table" id="users-table">
+              <thead><tr><th>Пользователь</th><th>Почта</th><th>Роль</th><th>Статус</th><th>Последний вход</th><th></th></tr></thead>
+              <tbody>
+                <tr>
+                  <td><div class="cell-user"><span class="avatar avatar-sm av-6">ЮИ</span>Ибрагимова Юлдуз Ахмедовна</div></td>
+                  <td>y.ibragimova@finpulse.ru</td>
+                  <td><span class="badge badge-purple no-dot">Супер-админ</span></td>
+                  <td><span class="badge badge-green">Активен</span></td>
+                  <td>сегодня, 11:41</td>
+                  <td></td>
+                </tr>
+                <tr>
+                  <td><div class="cell-user"><span class="avatar avatar-sm av-1">ЕК</span>Крылова Елена</div></td>
+                  <td>e.krylova@finpulse.ru</td>
+                  <td><span class="badge badge-blue no-dot">Бухгалтер</span></td>
+                  <td><span class="badge badge-green">Активен</span></td>
+                  <td>сегодня, 09:02</td>
+                  <td>
+                    <div class="dropdown">
+                      <button class="btn btn-ghost btn-icon btn-sm" data-dropdown-toggle aria-label="Действия"><i data-lucide="more-horizontal" class="icon"></i></button>
+                      <div class="dropdown-menu">
+                        <button class="dropdown-item" data-modal-open="modal-create-employee"><i data-lucide="pencil" class="icon"></i>Редактировать</button>
+                        <button class="dropdown-item" data-toast="info|Пароль сброшен|Ссылка для восстановления отправлена на почту."><i data-lucide="key-round" class="icon"></i>Сбросить пароль</button>
+                        <div class="dropdown-divider"></div>
+                        <button class="dropdown-item danger" data-modal-open="modal-delete"><i data-lucide="user-x" class="icon"></i>Заблокировать</button>
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+                <tr>
+                  <td><div class="cell-user"><span class="avatar avatar-sm av-2">ДО</span>Орлов Дмитрий</div></td>
+                  <td>d.orlov@finpulse.ru</td>
+                  <td><span class="badge badge-blue no-dot">Бухгалтер</span></td>
+                  <td><span class="badge badge-green">Активен</span></td>
+                  <td>сегодня, 08:47</td>
+                  <td>
+                    <div class="dropdown">
+                      <button class="btn btn-ghost btn-icon btn-sm" data-dropdown-toggle aria-label="Действия"><i data-lucide="more-horizontal" class="icon"></i></button>
+                      <div class="dropdown-menu">
+                        <button class="dropdown-item" data-modal-open="modal-create-employee"><i data-lucide="pencil" class="icon"></i>Редактировать</button>
+                        <button class="dropdown-item" data-toast="info|Пароль сброшен|Ссылка для восстановления отправлена на почту."><i data-lucide="key-round" class="icon"></i>Сбросить пароль</button>
+                        <div class="dropdown-divider"></div>
+                        <button class="dropdown-item danger" data-modal-open="modal-delete"><i data-lucide="user-x" class="icon"></i>Заблокировать</button>
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+                <tr>
+                  <td><div class="cell-user"><span class="avatar avatar-sm av-3">АС</span>Смирнова Анна</div></td>
+                  <td>a.smirnova@finpulse.ru</td>
+                  <td><span class="badge badge-blue no-dot">Бухгалтер</span></td>
+                  <td><span class="badge badge-green">Активен</span></td>
+                  <td>вчера, 18:15</td>
+                  <td>
+                    <div class="dropdown">
+                      <button class="btn btn-ghost btn-icon btn-sm" data-dropdown-toggle aria-label="Действия"><i data-lucide="more-horizontal" class="icon"></i></button>
+                      <div class="dropdown-menu">
+                        <button class="dropdown-item" data-modal-open="modal-create-employee"><i data-lucide="pencil" class="icon"></i>Редактировать</button>
+                        <button class="dropdown-item" data-toast="info|Пароль сброшен|Ссылка для восстановления отправлена на почту."><i data-lucide="key-round" class="icon"></i>Сбросить пароль</button>
+                        <div class="dropdown-divider"></div>
+                        <button class="dropdown-item danger" data-modal-open="modal-delete"><i data-lucide="user-x" class="icon"></i>Заблокировать</button>
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+                <tr>
+                  <td><div class="cell-user"><span class="avatar avatar-sm av-4">ИВ</span>Васильев Игорь</div></td>
+                  <td>i.vasiliev@finpulse.ru</td>
+                  <td><span class="badge badge-blue no-dot">Бухгалтер</span></td>
+                  <td><span class="badge badge-yellow">Приглашён</span></td>
+                  <td>—</td>
+                  <td>
+                    <div class="dropdown">
+                      <button class="btn btn-ghost btn-icon btn-sm" data-dropdown-toggle aria-label="Действия"><i data-lucide="more-horizontal" class="icon"></i></button>
+                      <div class="dropdown-menu">
+                        <button class="dropdown-item" data-toast="success|Приглашение отправлено|Письмо повторно отправлено пользователю."><i data-lucide="mail" class="icon"></i>Отправить приглашение снова</button>
+                        <div class="dropdown-divider"></div>
+                        <button class="dropdown-item danger" data-modal-open="modal-delete"><i data-lucide="user-x" class="icon"></i>Удалить</button>
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+                <tr>
+                  <td><div class="cell-user"><span class="avatar avatar-sm av-5">ОН</span>Никитина Ольга</div></td>
+                  <td>o.nikitina@finpulse.ru</td>
+                  <td><span class="badge badge-cyan no-dot">Руководитель</span></td>
+                  <td><span class="badge badge-green">Активен</span></td>
+                  <td>сегодня, 10:30</td>
+                  <td>
+                    <div class="dropdown">
+                      <button class="btn btn-ghost btn-icon btn-sm" data-dropdown-toggle aria-label="Действия"><i data-lucide="more-horizontal" class="icon"></i></button>
+                      <div class="dropdown-menu">
+                        <button class="dropdown-item" data-modal-open="modal-create-employee"><i data-lucide="pencil" class="icon"></i>Редактировать</button>
+                        <button class="dropdown-item" data-toast="info|Пароль сброшен|Ссылка для восстановления отправлена на почту."><i data-lucide="key-round" class="icon"></i>Сбросить пароль</button>
+                        <div class="dropdown-divider"></div>
+                        <button class="dropdown-item danger" data-modal-open="modal-delete"><i data-lucide="user-x" class="icon"></i>Заблокировать</button>
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="empty-state hidden" data-empty-for="users-table">
+            <div class="es-icon"><i data-lucide="search-x" class="icon"></i></div>
+            <h3>Пользователи не найдены</h3>
+            <p>Измените условия поиска или пригласите нового пользователя.</p>
+          </div>
+        </section>
+      </div>
+
+      <!-- Роли -->
+      <div class="tab-panel" id="tab-roles" data-tab-scope="settings">
+        <div class="role-grid">
+          <section class="card role-card">
+            <div class="role-name"><i data-lucide="shield-check" class="icon" style="color:var(--purple);"></i>Администратор</div>
+            <p class="role-desc">Полный доступ ко всем разделам, настройкам и данным системы.</p>
+            <div class="role-perms">
+              <label class="checkbox-label"><input type="checkbox" checked disabled> Управление пользователями и ролями</label>
+              <label class="checkbox-label"><input type="checkbox" checked disabled> Настройка правил распределения</label>
+              <label class="checkbox-label"><input type="checkbox" checked disabled> Удаление клиентов и задач</label>
+              <label class="checkbox-label"><input type="checkbox" checked disabled> Доступ к аналитике</label>
+            </div>
+          </section>
+          <section class="card role-card">
+            <div class="role-name"><i data-lucide="shield" class="icon" style="color:var(--info);"></i>Руководитель</div>
+            <p class="role-desc">Управление задачами и клиентами всей команды, доступ к аналитике.</p>
+            <div class="role-perms">
+              <label class="checkbox-label"><input type="checkbox" disabled> Управление пользователями и ролями</label>
+              <label class="checkbox-label"><input type="checkbox" checked disabled> Настройка правил распределения</label>
+              <label class="checkbox-label"><input type="checkbox" checked disabled> Переназначение задач</label>
+              <label class="checkbox-label"><input type="checkbox" checked disabled> Доступ к аналитике</label>
+            </div>
+          </section>
+          <section class="card role-card">
+            <div class="role-name"><i data-lucide="user" class="icon" style="color:var(--accent);"></i>Бухгалтер</div>
+            <p class="role-desc">Работа со своими клиентами и задачами, комментарии и файлы.</p>
+            <div class="role-perms">
+              <label class="checkbox-label"><input type="checkbox" checked disabled> Свои клиенты и задачи</label>
+              <label class="checkbox-label"><input type="checkbox" checked disabled> Комментарии и файлы</label>
+              <label class="checkbox-label"><input type="checkbox" disabled> Переназначение задач</label>
+              <label class="checkbox-label"><input type="checkbox" disabled> Доступ к аналитике</label>
+            </div>
+          </section>
+        </div>
+        <div class="mt-16" style="text-align:right;">
+          <button class="btn btn-primary" data-toast="success|Роли сохранены|Изменения прав применены."><i data-lucide="check" class="icon"></i>Сохранить изменения</button>
+        </div>
+      </div>
+
+      <!-- Статусы -->
+      <div class="tab-panel" id="tab-statuses" data-tab-scope="settings">
+        <section class="card">
+          <div class="card-header">
+            <h2>Статусы задач</h2>
+            <button class="btn btn-secondary btn-sm" data-toast="info|Новый статус|В прототипе добавление статуса — макет."><i data-lucide="plus" class="icon"></i>Добавить статус</button>
+          </div>
+          <div>
+            <div class="settings-row">
+              <div class="flex items-center gap-12"><span class="badge badge-purple">Новая</span><span class="sr-desc">Задача создана и ещё не взята в работу</span></div>
+              <button class="btn btn-ghost btn-icon btn-sm" data-toast="info|Редактирование статуса|Макет: название и цвет статуса." aria-label="Редактировать"><i data-lucide="pencil" class="icon"></i></button>
+            </div>
+            <div class="settings-row">
+              <div class="flex items-center gap-12"><span class="badge badge-blue">В работе</span><span class="sr-desc">Исполнитель работает над задачей</span></div>
+              <button class="btn btn-ghost btn-icon btn-sm" data-toast="info|Редактирование статуса|Макет: название и цвет статуса." aria-label="Редактировать"><i data-lucide="pencil" class="icon"></i></button>
+            </div>
+            <div class="settings-row">
+              <div class="flex items-center gap-12"><span class="badge badge-yellow">Ожидание</span><span class="sr-desc">Ожидание документов или ответа клиента / госоргана</span></div>
+              <button class="btn btn-ghost btn-icon btn-sm" data-toast="info|Редактирование статуса|Макет: название и цвет статуса." aria-label="Редактировать"><i data-lucide="pencil" class="icon"></i></button>
+            </div>
+            <div class="settings-row">
+              <div class="flex items-center gap-12"><span class="badge badge-green">Выполнена</span><span class="sr-desc">Работа завершена и подтверждена</span></div>
+              <button class="btn btn-ghost btn-icon btn-sm" data-toast="info|Редактирование статуса|Макет: название и цвет статуса." aria-label="Редактировать"><i data-lucide="pencil" class="icon"></i></button>
+            </div>
+            <div class="settings-row">
+              <div class="flex items-center gap-12"><span class="badge badge-gray">Отменена</span><span class="sr-desc">Задача не актуальна, работа не выполнялась</span></div>
+              <button class="btn btn-ghost btn-icon btn-sm" data-toast="info|Редактирование статуса|Макет: название и цвет статуса." aria-label="Редактировать"><i data-lucide="pencil" class="icon"></i></button>
+            </div>
+          </div>
+        </section>
+
+        <section class="card mt-16">
+          <div class="card-header"><h2>Приоритеты</h2></div>
+          <div>
+            <div class="settings-row">
+              <div class="flex items-center gap-12"><span class="badge badge-gray">Низкий</span><span class="sr-desc">Можно выполнить в свободное время</span></div>
+            </div>
+            <div class="settings-row">
+              <div class="flex items-center gap-12"><span class="badge badge-blue">Средний</span><span class="sr-desc">Стандартный приоритет для плановых задач</span></div>
+            </div>
+            <div class="settings-row">
+              <div class="flex items-center gap-12"><span class="badge badge-yellow">Высокий</span><span class="sr-desc">Важные задачи с жёсткими сроками</span></div>
+            </div>
+            <div class="settings-row">
+              <div class="flex items-center gap-12"><span class="badge badge-red">Критический</span><span class="sr-desc">Требования госорганов, штрафные риски</span></div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- Правила распределения -->
+      <div class="tab-panel" id="tab-rules" data-tab-scope="settings">
+        <section class="card">
+          <div class="card-header">
+            <h2>Правила автораспределения задач</h2>
+            <button class="btn btn-primary btn-sm" data-modal-open="modal-distribution"><i data-lucide="plus" class="icon"></i>Новое правило</button>
+          </div>
+          <div>
+            <div class="rule-item">
+              <div class="rule-num">1</div>
+              <div style="flex:1;">
+                <div class="rule-title">Обращения из Telegram → ответственный бухгалтер</div>
+                <div class="rule-desc">Источник: Telegram · Приоритет: Средний · Срок: 2 рабочих дня · Уведомления: исполнителю в Telegram</div>
+              </div>
+              <label class="toggle"><input type="checkbox" checked><span class="slider"></span></label>
+              <button class="btn btn-ghost btn-icon btn-sm" data-modal-open="modal-distribution" aria-label="Настроить"><i data-lucide="pencil" class="icon"></i></button>
+            </div>
+            <div class="rule-item">
+              <div class="rule-num">2</div>
+              <div style="flex:1;">
+                <div class="rule-title">Задачи без исполнителя → наименее загруженный сотрудник</div>
+                <div class="rule-desc">Источник: любой · Учитывается текущая загрузка и количество активных задач</div>
+              </div>
+              <label class="toggle"><input type="checkbox" checked><span class="slider"></span></label>
+              <button class="btn btn-ghost btn-icon btn-sm" data-modal-open="modal-distribution" aria-label="Настроить"><i data-lucide="pencil" class="icon"></i></button>
+            </div>
+            <div class="rule-item">
+              <div class="rule-num">3</div>
+              <div style="flex:1;">
+                <div class="rule-title">Требования госорганов → налоговый консультант</div>
+                <div class="rule-desc">Ключевые слова: «требование», «ИФНС», «проверка» · Приоритет: Критический · Срок: 1 рабочий день</div>
+              </div>
+              <label class="toggle"><input type="checkbox" checked><span class="slider"></span></label>
+              <button class="btn btn-ghost btn-icon btn-sm" data-modal-open="modal-distribution" aria-label="Настроить"><i data-lucide="pencil" class="icon"></i></button>
+            </div>
+            <div class="rule-item">
+              <div class="rule-num">4</div>
+              <div style="flex:1;">
+                <div class="rule-title">Зарплатные задачи → бухгалтер по зарплате</div>
+                <div class="rule-desc">Ключевые слова: «зарплата», «отпускные», «больничный» · Отключено: сотрудник перегружен</div>
+              </div>
+              <label class="toggle"><input type="checkbox"><span class="slider"></span></label>
+              <button class="btn btn-ghost btn-icon btn-sm" data-modal-open="modal-distribution" aria-label="Настроить"><i data-lucide="pencil" class="icon"></i></button>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- Уведомления -->
+      <div class="tab-panel" id="tab-notifications" data-tab-scope="settings">
+        <section class="card">
+          <div class="card-header"><h2>Уведомления в системе и Telegram</h2></div>
+          <div>
+            <div class="settings-row">
+              <div>
+                <div class="sr-title">Новая задача назначена мне</div>
+                <div class="sr-desc">Мгновенное уведомление в системе и в Telegram</div>
+              </div>
+              <label class="toggle"><input type="checkbox" checked><span class="slider"></span></label>
+            </div>
+            <div class="settings-row">
+              <div>
+                <div class="sr-title">Новое обращение клиента из Telegram</div>
+                <div class="sr-desc">Для ответственного бухгалтера клиента</div>
+              </div>
+              <label class="toggle"><input type="checkbox" checked><span class="slider"></span></label>
+            </div>
+            <div class="settings-row">
+              <div>
+                <div class="sr-title">Приближается дедлайн</div>
+                <div class="sr-desc">Напоминание за 24 часа до срока задачи</div>
+              </div>
+              <label class="toggle"><input type="checkbox" checked><span class="slider"></span></label>
+            </div>
+            <div class="settings-row">
+              <div>
+                <div class="sr-title">Задача просрочена</div>
+                <div class="sr-desc">Уведомление исполнителю и руководителю</div>
+              </div>
+              <label class="toggle"><input type="checkbox" checked><span class="slider"></span></label>
+            </div>
+            <div class="settings-row">
+              <div>
+                <div class="sr-title">Новый комментарий в моей задаче</div>
+                <div class="sr-desc">Уведомление в системе</div>
+              </div>
+              <label class="toggle"><input type="checkbox" checked><span class="slider"></span></label>
+            </div>
+            <div class="settings-row">
+              <div>
+                <div class="sr-title">Еженедельная сводка по команде</div>
+                <div class="sr-desc">По понедельникам в 09:00 — только для руководителей</div>
+              </div>
+              <label class="toggle"><input type="checkbox"><span class="slider"></span></label>
+            </div>
+          </div>
+          <div class="card-footer" style="text-align:right;">
+            <button class="btn btn-primary" data-toast="success|Настройки сохранены|Параметры уведомлений обновлены."><i data-lucide="check" class="icon"></i>Сохранить</button>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+</div>
+
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+<script src="assets/js/app.js"></script>
+</body>
+</html>

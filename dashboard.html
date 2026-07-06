@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Дашборд — Finpulse CRM</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="assets/css/base.css">
+  <link rel="stylesheet" href="assets/css/layout.css">
+  <link rel="stylesheet" href="assets/css/components.css">
+  <link rel="stylesheet" href="assets/css/pages.css">
+</head>
+<body>
+<div class="app">
+
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+      <div class="logo-mark">F</div>
+      <div class="logo-text">Finpulse <span>CRM</span></div>
+    </div>
+    <nav class="sidebar-nav">
+      <a class="nav-item active" href="dashboard.html"><i data-lucide="layout-dashboard" class="icon"></i>Дашборд</a>
+      <a class="nav-item" href="tasks.html"><i data-lucide="list-todo" class="icon"></i>Задачи<span class="nav-count">37</span></a>
+      <a class="nav-item" href="clients.html"><i data-lucide="building-2" class="icon"></i>Клиенты</a>
+      <a class="nav-item" href="employees.html"><i data-lucide="users" class="icon"></i>Сотрудники</a>
+      <a class="nav-item" href="analytics.html"><i data-lucide="bar-chart-3" class="icon"></i>Аналитика</a>
+      <a class="nav-item" href="settings.html" data-role-admin><i data-lucide="settings" class="icon"></i>Настройки</a>
+      <div class="nav-section">Интеграции</div>
+      <a class="nav-item" href="telegram.html"><i data-lucide="send" class="icon"></i>Telegram<span class="nav-count">4</span></a>
+    </nav>
+    <div class="sidebar-footer">
+      <a class="sidebar-user" href="employee.html">
+        <span class="avatar av-6">ЮИ</span>
+        <div class="sidebar-user-info">
+          <div class="name">Ибрагимова Юлдуз</div>
+          <div class="role">Главный бухгалтер · супер-админ</div>
+        </div>
+      </a>
+    </div>
+  </aside>
+  <div class="sidebar-overlay"></div>
+
+  <div class="main">
+    <header class="topbar">
+      <button class="topbar-burger" data-sidebar-toggle aria-label="Меню"><i data-lucide="menu" class="icon"></i></button>
+      <div class="topbar-search">
+        <i data-lucide="search" class="icon"></i>
+        <input type="text" placeholder="Поиск по клиентам, задачам, сотрудникам…">
+        <kbd>Ctrl K</kbd>
+      </div>
+      <div class="topbar-actions">
+        <div class="dropdown">
+          <button class="topbar-btn" data-dropdown-toggle data-tooltip="Уведомления" aria-label="Уведомления">
+            <i data-lucide="bell" class="icon"></i><span class="dot"></span>
+          </button>
+          <div class="dropdown-menu menu-wide">
+            <div class="dropdown-header">Уведомления</div>
+            <div class="notif-item">
+              <div class="notif-icon ic-blue"><i data-lucide="send" class="icon"></i></div>
+              <div><div class="notif-title">Новое обращение из Telegram: ООО «ТехноСфера»</div><div class="notif-time">5 минут назад</div></div>
+            </div>
+            <div class="notif-item">
+              <div class="notif-icon ic-red"><i data-lucide="alert-circle" class="icon"></i></div>
+              <div><div class="notif-title">Просрочена задача «Акт сверки — СтройГарант»</div><div class="notif-time">1 час назад</div></div>
+            </div>
+            <div class="notif-item">
+              <div class="notif-icon ic-green"><i data-lucide="check-circle" class="icon"></i></div>
+              <div><div class="notif-title">Дмитрий Орлов выполнил задачу «6-НДФЛ за полугодие»</div><div class="notif-time">сегодня, 10:12</div></div>
+            </div>
+            <div class="dropdown-divider"></div>
+            <button class="dropdown-item" data-toast="info|Уведомления|Все уведомления отмечены прочитанными."><i data-lucide="check-check" class="icon"></i>Отметить всё прочитанным</button>
+          </div>
+        </div>
+        <div class="dropdown">
+          <button class="topbar-profile" data-dropdown-toggle>
+            <span class="avatar avatar-sm av-6">ЮИ</span>
+            <span class="profile-name fw-500">Юлдуз</span>
+            <i data-lucide="chevron-down" class="icon icon-sm text-muted"></i>
+          </button>
+          <div class="dropdown-menu">
+            <a class="dropdown-item" href="employee.html"><i data-lucide="user" class="icon"></i>Мой профиль</a>
+            <a class="dropdown-item" href="settings.html" data-role-admin><i data-lucide="settings" class="icon"></i>Настройки</a>
+            <div class="dropdown-divider"></div>
+            <a class="dropdown-item danger" href="login.html"><i data-lucide="log-out" class="icon"></i>Выйти</a>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <main class="page">
+      <div class="page-header">
+        <div>
+          <h1>Дашборд</h1>
+          <p class="subtitle">Понедельник, 6 июля 2026 · Обзор работы бухгалтерии</p>
+        </div>
+        <div class="page-header-actions">
+          <button class="btn btn-secondary" data-role-admin data-modal-open="modal-create-client"><i data-lucide="building-2" class="icon"></i>Новый клиент</button>
+          <button class="btn btn-primary" data-modal-open="modal-create-task"><i data-lucide="plus" class="icon"></i>Новая задача</button>
+        </div>
+      </div>
+
+      <!-- KPI -->
+      <section class="kpi-grid">
+        <div class="card kpi-card card-hover" data-skeleton>
+          <div class="kpi-top">
+            <span class="kpi-label">Клиенты</span>
+            <span class="kpi-icon ic-blue"><i data-lucide="building-2" class="icon"></i></span>
+          </div>
+          <div class="kpi-value">48</div>
+          <div class="kpi-trend"><span class="up"><i data-lucide="arrow-up-right" class="icon"></i>+3</span> за месяц</div>
+        </div>
+        <div class="card kpi-card card-hover" data-skeleton>
+          <div class="kpi-top">
+            <span class="kpi-label">Активные задачи</span>
+            <span class="kpi-icon ic-purple"><i data-lucide="list-todo" class="icon"></i></span>
+          </div>
+          <div class="kpi-value">37</div>
+          <div class="kpi-trend"><span class="up"><i data-lucide="arrow-up-right" class="icon"></i>+5</span> за неделю</div>
+        </div>
+        <div class="card kpi-card card-hover" data-skeleton>
+          <div class="kpi-top">
+            <span class="kpi-label">Выполненные</span>
+            <span class="kpi-icon ic-green"><i data-lucide="check-circle" class="icon"></i></span>
+          </div>
+          <div class="kpi-value">124</div>
+          <div class="kpi-trend"><span class="up"><i data-lucide="arrow-up-right" class="icon"></i>+12%</span> к прошлому месяцу</div>
+        </div>
+        <div class="card kpi-card card-hover" data-skeleton>
+          <div class="kpi-top">
+            <span class="kpi-label">Просроченные</span>
+            <span class="kpi-icon ic-red"><i data-lucide="alert-circle" class="icon"></i></span>
+          </div>
+          <div class="kpi-value text-danger">5</div>
+          <div class="kpi-trend"><span class="down"><i data-lucide="arrow-down-right" class="icon"></i>−2</span> за неделю</div>
+        </div>
+      </section>
+
+      <div class="dash-grid">
+        <div class="dash-col">
+
+          <!-- Задачи на сегодня -->
+          <section class="card">
+            <div class="card-header">
+              <h2>Задачи на сегодня</h2>
+              <a href="tasks.html" class="btn btn-ghost btn-sm">Все задачи<i data-lucide="arrow-right" class="icon"></i></a>
+            </div>
+            <div>
+              <div class="today-task">
+                <input type="checkbox" aria-label="Выполнено">
+                <div class="tt-info">
+                  <div class="tt-title">Подготовить декларацию по НДС за II квартал</div>
+                  <div class="tt-client">ООО «ТехноСфера» · Елена Крылова</div>
+                </div>
+                <span class="badge badge-yellow">Высокий</span>
+                <span class="text-muted text-sm">до 18:00</span>
+              </div>
+              <div class="today-task">
+                <input type="checkbox" aria-label="Выполнено">
+                <div class="tt-info">
+                  <div class="tt-title">Ответ на требование ИФНС № 14-08/2214</div>
+                  <div class="tt-client">ООО «СтройГарант» · Ольга Никитина</div>
+                </div>
+                <span class="badge badge-red">Критический</span>
+                <span class="text-muted text-sm">до 15:00</span>
+              </div>
+              <div class="today-task">
+                <input type="checkbox" aria-label="Выполнено">
+                <div class="tt-info">
+                  <div class="tt-title">Начислить зарплату за июнь</div>
+                  <div class="tt-client">АО «ВекторПлюс» · Анна Смирнова</div>
+                </div>
+                <span class="badge badge-blue">Средний</span>
+                <span class="text-muted text-sm">до 17:00</span>
+              </div>
+              <div class="today-task done">
+                <input type="checkbox" checked aria-label="Выполнено">
+                <div class="tt-info">
+                  <div class="tt-title">Выставить счета за июнь</div>
+                  <div class="tt-client">ИП Соколова А. В. · Дмитрий Орлов</div>
+                </div>
+                <span class="badge badge-gray">Низкий</span>
+                <span class="text-muted text-sm">готово</span>
+              </div>
+            </div>
+          </section>
+
+          <!-- Обращения из Telegram -->
+          <section class="card">
+            <div class="card-header">
+              <h2>Новые обращения из Telegram</h2>
+              <a href="telegram.html" class="btn btn-ghost btn-sm">Открыть демо<i data-lucide="arrow-right" class="icon"></i></a>
+            </div>
+            <div>
+              <div class="tg-request">
+                <span class="avatar av-3">ТС</span>
+                <div style="flex:1; min-width:0;">
+                  <div class="flex items-center justify-between gap-8">
+                    <span class="tg-from">ООО «ТехноСфера»</span><span class="tg-time">14:02</span>
+                  </div>
+                  <div class="tg-msg">Пришло требование из налоговой по НДС, нужна помощь до пятницы…</div>
+                </div>
+                <button class="btn btn-secondary btn-sm" data-modal-open="modal-create-task">Создать задачу</button>
+              </div>
+              <div class="tg-request">
+                <span class="avatar av-4">МФ</span>
+                <div style="flex:1; min-width:0;">
+                  <div class="flex items-center justify-between gap-8">
+                    <span class="tg-from">ООО «МедФарм»</span><span class="tg-time">12:47</span>
+                  </div>
+                  <div class="tg-msg">Добрый день! Нужен акт сверки с поставщиком «ФармОпт» за первое полугодие.</div>
+                </div>
+                <button class="btn btn-secondary btn-sm" data-modal-open="modal-create-task">Создать задачу</button>
+              </div>
+              <div class="tg-request">
+                <span class="avatar av-7">ЛГ</span>
+                <div style="flex:1; min-width:0;">
+                  <div class="flex items-center justify-between gap-8">
+                    <span class="tg-from">ООО «Логистик Групп»</span><span class="tg-time">09:15</span>
+                  </div>
+                  <div class="tg-msg">Подскажите, какие документы нужны для приёма нового сотрудника с 15 июля?</div>
+                </div>
+                <button class="btn btn-secondary btn-sm" data-modal-open="modal-create-task">Создать задачу</button>
+              </div>
+            </div>
+          </section>
+
+          <!-- Загрузка сотрудников -->
+          <section class="card">
+            <div class="card-header">
+              <h2>Загрузка сотрудников</h2>
+              <a href="employees.html" class="btn btn-ghost btn-sm">Сотрудники<i data-lucide="arrow-right" class="icon"></i></a>
+            </div>
+            <div style="padding: 8px 0;">
+              <div class="load-row">
+                <span class="load-name">Елена Крылова</span>
+                <div class="progress"><div class="progress-bar yellow" style="width:85%"></div></div>
+                <span class="progress-value">85%</span>
+              </div>
+              <div class="load-row">
+                <span class="load-name">Дмитрий Орлов</span>
+                <div class="progress"><div class="progress-bar" style="width:64%"></div></div>
+                <span class="progress-value">64%</span>
+              </div>
+              <div class="load-row">
+                <span class="load-name">Анна Смирнова</span>
+                <div class="progress"><div class="progress-bar red" style="width:92%"></div></div>
+                <span class="progress-value">92%</span>
+              </div>
+              <div class="load-row">
+                <span class="load-name">Игорь Васильев</span>
+                <div class="progress"><div class="progress-bar green" style="width:41%"></div></div>
+                <span class="progress-value">41%</span>
+              </div>
+              <div class="load-row">
+                <span class="load-name">Ольга Никитина</span>
+                <div class="progress"><div class="progress-bar" style="width:58%"></div></div>
+                <span class="progress-value">58%</span>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <div class="dash-col">
+          <!-- Диаграмма статусов -->
+          <section class="card">
+            <div class="card-header"><h2>Статусы задач</h2><span class="badge badge-gray no-dot">июль</span></div>
+            <div class="donut-wrap">
+              <div class="donut">
+                <div class="donut-center"><span class="num">62</span><span class="lbl">всего задач</span></div>
+              </div>
+              <ul class="donut-legend">
+                <li><span class="sw" style="background:var(--accent)"></span>В работе<span class="val">20</span></li>
+                <li><span class="sw" style="background:var(--warning)"></span>Ожидание<span class="val">11</span></li>
+                <li><span class="sw" style="background:var(--purple)"></span>Новые<span class="val">7</span></li>
+                <li><span class="sw" style="background:var(--success)"></span>Выполнены<span class="val">19</span></li>
+                <li><span class="sw" style="background:var(--gray)"></span>Отменены<span class="val">5</span></li>
+              </ul>
+            </div>
+          </section>
+
+          <!-- Последняя активность -->
+          <section class="card">
+            <div class="card-header"><h2>Последняя активность</h2></div>
+            <div class="card-body">
+              <div class="timeline">
+                <div class="timeline-item">
+                  <div class="tl-icon ic-green"><i data-lucide="check" class="icon"></i></div>
+                  <div class="tl-body">
+                    <div class="tl-text"><b>Дмитрий Орлов</b> выполнил задачу «6-НДФЛ за полугодие»</div>
+                    <div class="tl-time">сегодня, 10:12</div>
+                  </div>
+                </div>
+                <div class="timeline-item">
+                  <div class="tl-icon ic-blue"><i data-lucide="send" class="icon"></i></div>
+                  <div class="tl-body">
+                    <div class="tl-text">Из <b>Telegram</b> создана задача для <b>ООО «ТехноСфера»</b></div>
+                    <div class="tl-time">сегодня, 09:40</div>
+                  </div>
+                </div>
+                <div class="timeline-item">
+                  <div class="tl-icon ic-purple"><i data-lucide="user-plus" class="icon"></i></div>
+                  <div class="tl-body">
+                    <div class="tl-text"><b>Елена Крылова</b> назначена ответственной за <b>ООО «АгроТрейд»</b></div>
+                    <div class="tl-time">вчера, 17:03</div>
+                  </div>
+                </div>
+                <div class="timeline-item">
+                  <div class="tl-icon ic-yellow"><i data-lucide="clock" class="icon"></i></div>
+                  <div class="tl-body">
+                    <div class="tl-text">Задача «Акт сверки — СтройГарант» переведена в статус <b>«Ожидание»</b></div>
+                    <div class="tl-time">вчера, 15:26</div>
+                  </div>
+                </div>
+                <div class="timeline-item">
+                  <div class="tl-icon ic-gray"><i data-lucide="paperclip" class="icon"></i></div>
+                  <div class="tl-body">
+                    <div class="tl-text"><b>Анна Смирнова</b> прикрепила файл «ведомость_июнь.xlsx»</div>
+                    <div class="tl-time">вчера, 14:11</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+<script src="assets/js/app.js"></script>
+</body>
+</html>
