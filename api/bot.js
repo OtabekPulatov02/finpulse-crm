@@ -43,6 +43,12 @@ const T = {
     menu: { newTask: "📝 Новая задача", myTasks: "📋 Мои задачи", lang: "🌐 Язык", help: "ℹ️ Помощь" },
     myTasksTitle: "📋 Ваши последние задачи:",
     noTasks: "У вас пока нет задач. Просто напишите, что нужно сделать 👇",
+    askPhone: "И последнее: отправьте номер телефона — по нему мы точно привяжем вас к вашей компании в системе 📱",
+    btnShareContact: "📱 Отправить мой номер",
+    btnSkip: "Пропустить",
+    companyConfirm: (m) => `Похоже, вы из этой компании:\n\n🏢 ${m}\n\nВерно?`,
+    btnYes: "✅ Да, верно",
+    btnNo: "✍️ Нет, другая",
   },
   uz: {
     askCompany: "Ajoyib! 🇺🇿\nKompaniyangiz nomi qanday? Bitta xabar bilan yozing.",
@@ -67,6 +73,12 @@ const T = {
     menu: { newTask: "📝 Yangi vazifa", myTasks: "📋 Vazifalarim", lang: "🌐 Til", help: "ℹ️ Yordam" },
     myTasksTitle: "📋 So'nggi vazifalaringiz:",
     noTasks: "Hozircha vazifalar yo'q. Nima qilish kerakligini yozing 👇",
+    askPhone: "Va nihoyat: telefon raqamingizni yuboring — u orqali sizni tizimdagi kompaniyangizga aniq bog'laymiz 📱",
+    btnShareContact: "📱 Raqamimni yuborish",
+    btnSkip: "O'tkazib yuborish",
+    companyConfirm: (m) => `Siz shu kompaniyadansiz shekilli:\n\n🏢 ${m}\n\nTo'g'rimi?`,
+    btnYes: "✅ Ha, to'g'ri",
+    btnNo: "✍️ Yo'q, boshqa",
   },
   en: {
     askCompany: "Great! 🇬🇧\nWhat is your company name? Send it in one message.",
@@ -91,6 +103,12 @@ const T = {
     menu: { newTask: "📝 New task", myTasks: "📋 My tasks", lang: "🌐 Language", help: "ℹ️ Help" },
     myTasksTitle: "📋 Your recent tasks:",
     noTasks: "No tasks yet. Just write what needs to be done 👇",
+    askPhone: "One last thing: share your phone number — we use it to link you to your company in our system 📱",
+    btnShareContact: "📱 Share my number",
+    btnSkip: "Skip",
+    companyConfirm: (m) => `Looks like you are from:\n\n🏢 ${m}\n\nIs that right?`,
+    btnYes: "✅ Yes, correct",
+    btnNo: "✍️ No, different",
   },
 };
 
@@ -136,6 +154,59 @@ function mainKb(lang) {
     resize_keyboard: true,
     is_persistent: true,
   };
+}
+
+function phoneKb(t) {
+  return {
+    keyboard: [[{ text: t.btnShareContact, request_contact: true }], [{ text: t.btnSkip }]],
+    resize_keyboard: true,
+    one_time_keyboard: true,
+  };
+}
+
+/* Нечёткое сопоставление названия компании с базой клиентов */
+function normCompany(str) {
+  return String(str)
+    .toLowerCase()
+    .replace(/[«»"'\u2018\u2019\u201c\u201d.,:;()\-–—_/\\]/g, " ")
+    .replace(/\b(ооо|оао|зао|ао|ип|чп|мчж|хк|ooo|oao|llc|ltd|inc|mchj|xk|xt)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function levenshtein(a, b) {
+  const m = a.length, n = b.length;
+  if (!m) return n; if (!n) return m;
+  let prev = Array.from({ length: n + 1 }, (_, i) => i);
+  for (let i = 1; i <= m; i++) {
+    const cur = [i];
+    for (let j = 1; j <= n; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    }
+    prev = cur;
+  }
+  return prev[n];
+}
+
+async function fuzzyCompany(name) {
+  const list = (await redis.smembers("companies")) || [];
+  const n = normCompany(name);
+  if (!n) return null;
+  let best = null, bestD = Infinity;
+  for (const c of list) {
+    const m = normCompany(c);
+    if (!m) continue;
+    if (m === n) return { name: c, exact: true };
+    if (m.includes(n) || n.includes(m)) {
+      const d = Math.abs(m.length - n.length) * 0.5;
+      if (d < bestD) { bestD = d; best = c; }
+      continue;
+    }
+    const d = levenshtein(n, m);
+    const lim = Math.max(2, Math.floor(Math.min(n.length, m.length) * 0.34));
+    if (d <= lim && d < bestD) { bestD = d; best = c; }
+  }
+  return best ? { name: best, exact: false } : null;
 }
 
 const STATUS_EMOJI = { new: "⚪️", in_progress: "🔵", done: "🟢" };
@@ -254,6 +325,26 @@ bot.callbackQuery(/^lang:(ru|uz|en)$/, async (ctx) => {
   await setUser(ctx.from.id, u);
   await ctx.answerCallbackQuery(T[lang].langSaved);
   return ctx.reply(T[lang].idleHint, { reply_markup: mainKb(lang) });
+});
+
+/* ---------------- Подтверждение компании ---------------- */
+bot.callbackQuery(/^comp:(yes|no)$/, async (ctx) => {
+  const u = await getUser(ctx.from.id);
+  if (!u || u.state !== "confirm_company") return ctx.answerCallbackQuery();
+  const t = T[u.lang];
+  if (ctx.match[1] === "yes") {
+    u.company = u.matchedCompany;
+  } else {
+    u.company = u.pendingCompany;
+    await redis.sadd("companies", u.company);
+  }
+  delete u.pendingCompany;
+  delete u.matchedCompany;
+  u.state = u.phone ? "idle" : "phone";
+  await setUser(ctx.from.id, u);
+  await ctx.answerCallbackQuery("🏢 " + u.company);
+  if (u.state === "idle") return ctx.reply(t.ready(u.company), { reply_markup: mainKb(u.lang) });
+  return ctx.reply(t.askPhone, { reply_markup: phoneKb(t) });
 });
 
 /* ---------------- Отправка / отмена задачи ---------------- */
@@ -376,6 +467,23 @@ bot.callbackQuery(/^done:(\d+)$/, async (ctx) => {
   await bot.api.sendMessage(task.client, T[clientLang].done(num));
 });
 
+/* ---------------- Автоответчик Telegram Business ---------------- */
+bot.on("business_message", async (ctx) => {
+  const msg = ctx.businessMessage;
+  if (!msg || !msg.from || !msg.chat) return;
+  if (msg.from.id !== msg.chat.id) return; // пишет владелец аккаунта — молчим
+  const key = "bizgreet:" + msg.chat.id;
+  if (await redis.get(key)) return; // уже приветствовали недавно
+  await redis.set(key, 1, { ex: 60 * 60 * 24 * 7 });
+  const username = (bot.botInfo && bot.botInfo.username) || "finpulse_crm_bot";
+  const text =
+    "👋 Здравствуйте! Это бухгалтерия Finpulse.\n\n" +
+    "Чтобы мы быстрее взяли вашу задачу в работу, отправьте её нашему боту — он мгновенно назначит специалиста и пришлёт номер задачи 👇\n\n" +
+    "Assalomu alaykum! Vazifangizni botimizga yuboring — darhol mutaxassis tayinlanadi 👇";
+  const kb = new InlineKeyboard().url("🚀 @" + username, "https://t.me/" + username);
+  try { await ctx.reply(text, { reply_markup: kb }); } catch (e) { console.error("biz reply:", e); }
+});
+
 /* ---------------- Сообщения ---------------- */
 bot.on("message", async (ctx) => {
   const msg = ctx.message;
@@ -408,11 +516,41 @@ bot.on("message", async (ctx) => {
   }
   const t = T[u.lang];
 
-  /* Онбординг: название компании */
+  /* Онбординг: название компании (с нечётким поиском по базе) */
   if (u.state === "company") {
-    const name = (msg.text || msg.caption || "").trim();
+    const name = (msg.text || msg.caption || "").trim().slice(0, 120);
     if (!name) return ctx.reply(t.askCompany);
-    u.company = name.slice(0, 120);
+    const match = await fuzzyCompany(name);
+    if (match && !match.exact) {
+      u.pendingCompany = name;
+      u.matchedCompany = match.name;
+      u.state = "confirm_company";
+      await setUser(ctx.from.id, u);
+      const kb = new InlineKeyboard().text(t.btnYes, "comp:yes").text(t.btnNo, "comp:no");
+      return ctx.reply(t.companyConfirm(match.name), { reply_markup: kb });
+    }
+    u.company = match ? match.name : name;
+    if (!match) await redis.sadd("companies", u.company);
+    u.state = u.phone ? "idle" : "phone";
+    await setUser(ctx.from.id, u);
+    if (u.state === "idle") return ctx.reply(t.ready(u.company), { reply_markup: mainKb(u.lang) });
+    return ctx.reply(t.askPhone, { reply_markup: phoneKb(t) });
+  }
+
+  /* Онбординг: телефон для привязки к CRM */
+  if (u.state === "phone") {
+    let phone = null;
+    if (msg.contact && msg.contact.phone_number) {
+      phone = msg.contact.phone_number;
+    } else {
+      const txt = (msg.text || "").trim();
+      const isSkip = Object.keys(T).some((l) => txt === T[l].btnSkip);
+      if (!isSkip) {
+        if (/^\+?[\d\s\-()]{7,18}$/.test(txt)) phone = txt.replace(/[\s\-()]/g, "");
+        else return ctx.reply(t.askPhone, { reply_markup: phoneKb(t) });
+      }
+    }
+    if (phone) u.phone = phone;
     u.state = "idle";
     await setUser(ctx.from.id, u);
     return ctx.reply(t.ready(u.company), { reply_markup: mainKb(u.lang) });
@@ -530,6 +668,18 @@ async function setupBotProfile() {
     await bot.api.raw.setMyShortDescription({ short_description: PROFILE.short[lng], language_code: lng });
   }
   done.push("short_description");
+  const hookUrl = "https://finpulse-crm.vercel.app/api/bot";
+  await bot.api.setWebhook(hookUrl, {
+    allowed_updates: ["message", "callback_query", "business_connection", "business_message"],
+    secret_token: process.env.TG_WEBHOOK_SECRET || undefined,
+  });
+  done.push("webhook(business)");
+  await redis.sadd(
+    "companies",
+    "ООО «ТехноСфера»", "ИП Соколова А. В.", "ООО «СтройГарант»",
+    "АО «ВекторПлюс»", "ООО «Логистик Групп»", "ООО «МедФарм»", "ООО «АгроТрейд»"
+  );
+  done.push("companies");
   return done;
 }
 
