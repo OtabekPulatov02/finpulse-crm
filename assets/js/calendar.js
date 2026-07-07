@@ -53,6 +53,7 @@
   var MONTHS = ["январь","февраль","март","апрель","май","июнь","июль","август","сентябрь","октябрь","ноябрь","декабрь"];
   var MONTHS_G = ["января","февраля","марта","апреля","мая","июня","июля","августа","сентября","октября","ноября","декабря"];
   var DOW = ["Пн","Вт","Ср","Чт","Пт","Сб","Вс"];
+  var DOW_FULL = ["понедельник","вторник","среда","четверг","пятница","суббота","воскресенье"];
 
   function sameDay(a, b) { return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate(); }
   function fmt(d) { return d.getDate() + " " + MONTHS_G[d.getMonth()]; }
@@ -159,14 +160,19 @@
   }
 
   /* ---------- Drawer: события дня ---------- */
+  var selectedDay = null;
+
   function openDay(d) {
+    selectedDay = new Date(d);
     var evs = eventsOn(d);
-    document.getElementById("day-title").textContent = fmt(d) + " " + d.getFullYear();
+    document.getElementById("day-title").textContent = fmt(d) + ", " + DOW_FULL[(d.getDay() + 6) % 7];
+    var cnt = document.getElementById("day-count");
+    if (cnt) cnt.textContent = evs.length ? "Событий: " + evs.length : "Свободный день";
     var box = document.getElementById("day-events");
     box.innerHTML = "";
 
     if (!evs.length) {
-      box.innerHTML = '<div class="empty-state" style="padding:36px 16px;"><div class="es-icon"><i data-lucide="calendar-plus" class="icon"></i></div><h3>Событий нет</h3><p>Добавьте налог, отчёт или обязательный платёж на этот день.</p></div>';
+      box.innerHTML = '<div class="empty-state" style="padding:36px 16px;"><div class="es-icon"><i data-lucide="calendar-plus" class="icon"></i></div><h3>На этот день ничего нет</h3><p>Нажмите кнопку ниже, чтобы добавить напоминание.</p></div>';
     }
 
     var ico = { tax: ["receipt", "ic-purple"], pay: ["credit-card", "ic-blue"], task: ["list-todo", "ic-yellow"] };
@@ -182,8 +188,8 @@
         "</div>" +
         '<div class="de-actions">' +
           (e.type !== "task" && !e.done
-            ? '<button class="btn btn-ghost btn-icon btn-sm" data-act="task" data-tooltip="Создать задачу"><i data-lucide="list-plus" class="icon"></i></button>' +
-              '<button class="btn btn-ghost btn-icon btn-sm" data-act="done" data-tooltip="Выполнено"><i data-lucide="check" class="icon"></i></button>'
+            ? '<button class="btn btn-secondary btn-sm" data-act="task"><i data-lucide="list-plus" class="icon"></i>В задачи</button>' +
+              '<button class="btn btn-secondary btn-sm" data-act="done"><i data-lucide="check" class="icon"></i>Готово</button>'
             : "") +
         "</div>";
       var btns = el.querySelectorAll("[data-act]");
@@ -209,12 +215,10 @@
 
   /* ---------- Модалка нового напоминания ---------- */
   var SUGGEST = {
-    tax: ["Оплата НДС", "Авансовый платёж УСН", "НДФЛ с зарплаты", "Соцвзносы", "Отчёт в статистику", "6-НДФЛ"],
-    pay: ["Аренда офиса", "Интернет и связь", "Коммунальные услуги", "Лизинг", "Страховка", "Обслуживание банка"]
+    tax: ["Оплата НДС", "Аванс по УСН", "НДФЛ и соцвзносы", "Отчёт в статистику"],
+    pay: ["Аренда офиса", "Интернет и связь", "Коммунальные", "Лизинг", "Страховка"]
   };
   var remType = "pay";
-  var remRepeat = "Ежемесячно";
-  var remRemind = "за 3 дня";
 
   function initReminderModal() {
     var typeBtns = document.querySelectorAll(".rem-type-btn");
@@ -224,90 +228,66 @@
         b.classList.add("active");
         remType = b.getAttribute("data-type");
         renderSuggest();
-        updateSummary();
       });
     });
-
     renderSuggest();
-    bindChips("rem-repeat", function (v) { remRepeat = v; updateSummary(); });
-    bindChips("rem-remind", function (v) { remRemind = v; updateSummary(); });
 
-    ["rem-title", "rem-date", "rem-company"].forEach(function (id) {
-      var el = document.getElementById(id);
-      if (el) el.addEventListener("input", updateSummary);
-      if (el) el.addEventListener("change", updateSummary);
-    });
+    // «Добавить на этот день» — подставляем выбранную дату
+    var dayAdd = document.getElementById("day-add-btn");
+    if (dayAdd) {
+      dayAdd.addEventListener("click", function () {
+        if (selectedDay) {
+          var iso = selectedDay.getFullYear() + "-" +
+            String(selectedDay.getMonth() + 1).padStart(2, "0") + "-" +
+            String(selectedDay.getDate()).padStart(2, "0");
+          document.getElementById("rem-date").value = iso;
+        }
+      });
+    }
 
-    var save = document.getElementById("rem-save");
-    save.addEventListener("click", function () {
+    document.getElementById("rem-save").addEventListener("click", function () {
       var title = document.getElementById("rem-title").value.trim();
-      var dateV = document.getElementById("rem-date").value;
       if (!title) {
-        window.showToast && showToast("warning", "Укажите название", "Например: «Аренда офиса» или «Оплата НДС».");
+        window.showToast && showToast("warning", "Укажите название", "Например: «Аренда офиса».");
         return;
       }
-      var amount = document.getElementById("rem-amount").value.trim();
-      var company = document.getElementById("rem-company").value;
+      var dateV = document.getElementById("rem-date").value;
       var d = dateV ? new Date(dateV + "T00:00:00") : new Date(today);
-      var remindDays = remRemind === "в день события" ? 0 : remRemind === "за 1 день" ? 1 : remRemind === "за 3 дня" ? 3 : 7;
+      var repeat = document.getElementById("rem-repeat").value;
+      var remind = document.getElementById("rem-remind").value;
+      var remindDays = remind === "в день события" ? 0 : remind === "за 1 день" ? 1 : remind === "за 3 дня" ? 3 : 7;
 
       EVENTS.push({
         date: d,
         type: remType,
-        title: title + (amount ? " — " + amount : ""),
-        company: company,
-        repeat: remRepeat === "Однократно" ? "" : remRepeat,
+        title: title,
+        company: document.getElementById("rem-company").value,
+        repeat: repeat === "Однократно" ? "" : repeat,
         remind: remindDays
       });
       cur = new Date(d.getFullYear(), d.getMonth(), 1);
       render();
       document.getElementById("modal-reminder").classList.remove("open");
       document.body.style.overflow = "";
-      window.showToast && showToast(
-        "success",
-        "Напоминание создано",
-        (remRepeat === "Однократно" ? fmt(d) : remRepeat + ", ближайшее " + fmt(d)) + " · бот уведомит группу " + remRemind + "."
-      );
+      document.getElementById("rem-title").value = "";
+      window.showToast && showToast("success", "Напоминание создано",
+        fmt(d) + (repeat === "Однократно" ? "" : " · " + repeat.toLowerCase()) + " · бот напомнит " + remind + ".");
     });
-
-    updateSummary();
   }
 
   function renderSuggest() {
     var box = document.getElementById("rem-suggest");
     box.innerHTML = "";
-    SUGGEST[remType].forEach(function (s) {
+    SUGGEST[remType].forEach(function (sug) {
       var c = document.createElement("button");
       c.type = "button";
       c.className = "chip";
-      c.textContent = s;
+      c.textContent = sug;
       c.addEventListener("click", function () {
-        document.getElementById("rem-title").value = s;
-        updateSummary();
+        document.getElementById("rem-title").value = sug;
       });
       box.appendChild(c);
     });
-  }
-
-  function bindChips(boxId, cb) {
-    var box = document.getElementById(boxId);
-    box.querySelectorAll(".chip").forEach(function (c) {
-      c.addEventListener("click", function () {
-        box.querySelectorAll(".chip").forEach(function (x) { x.classList.remove("active"); });
-        c.classList.add("active");
-        cb(c.textContent.trim());
-      });
-    });
-  }
-
-  function updateSummary() {
-    var title = document.getElementById("rem-title").value.trim() || "Напоминание";
-    var dateV = document.getElementById("rem-date").value;
-    var d = dateV ? new Date(dateV + "T00:00:00") : null;
-    var txt = "«" + title + "» · " +
-      (remRepeat === "Однократно" ? (d ? fmt(d) : "выберите дату") : remRepeat.toLowerCase() + (d ? ", ближайшее " + fmt(d) : "")) +
-      " · Telegram-группа " + remRemind;
-    document.getElementById("rem-summary-text").textContent = txt;
   }
 
   /* ---------- Фильтры и навигация ---------- */
