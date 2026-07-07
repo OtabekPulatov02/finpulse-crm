@@ -220,7 +220,7 @@ async function listTasks(ctx, u) {
     const task = await redis.get(taskKey(Number(n)));
     if (!task) continue;
     let text = (task.text || "").split("\n")[0];
-    if (text.length > 48) text = text.slice(0, 48) + "…";
+    if (text.length > 200) text = text.slice(0, 200) + "…";
     lines.push((STATUS_EMOJI[task.status] || "⚪️") + " №" + task.num + " · " + text + (task.assignee ? " · 👩‍💼 " + task.assignee : ""));
   }
   return ctx.reply(lines.join("\n"), { reply_markup: mainKb(u.lang) });
