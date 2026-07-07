@@ -209,6 +209,32 @@ async function fuzzyCompany(name) {
   return best ? { name: best, exact: false } : null;
 }
 
+async function finishOnboarding(ctx, u) {
+  const t = T[u.lang];
+  if (u.isNewCompany) {
+    delete u.isNewCompany;
+    await redis.lpush("pending_clients", JSON.stringify({
+      company: u.company,
+      phone: u.phone || null,
+      at: new Date().toISOString(),
+    }));
+    const group = await redis.get("group");
+    if (group) {
+      try {
+        await bot.api.sendMessage(
+          group,
+          "🆕 Новый клиент зарегистрировался в боте\n" +
+          "🏢 " + u.company + "\n\n" +
+          "Компании нет в базе CRM — создайте карточку, заполните данные и назначьте ответственного. " +
+          "Телефон клиента — в списке «Ожидают активации»."
+        );
+      } catch (e) { console.error("notify new company:", e); }
+    }
+  }
+  await setUser(ctx.from.id, u);
+  return ctx.reply(t.ready(u.company), { reply_markup: mainKb(u.lang) });
+}
+
 const STATUS_EMOJI = { new: "⚪️", in_progress: "🔵", done: "🟢" };
 
 async function listTasks(ctx, u) {
@@ -220,7 +246,7 @@ async function listTasks(ctx, u) {
     const task = await redis.get(taskKey(Number(n)));
     if (!task) continue;
     let text = (task.text || "").split("\n")[0];
-    if (text.length > 200) text = text.slice(0, 200) + "…";
+    if (text.length > 48) text = text.slice(0, 48) + "…";
     lines.push((STATUS_EMOJI[task.status] || "⚪️") + " №" + task.num + " · " + text + (task.assignee ? " · 👩‍💼 " + task.assignee : ""));
   }
   return ctx.reply(lines.join("\n"), { reply_markup: mainKb(u.lang) });
@@ -337,13 +363,14 @@ bot.callbackQuery(/^comp:(yes|no)$/, async (ctx) => {
   } else {
     u.company = u.pendingCompany;
     await redis.sadd("companies", u.company);
+    u.isNewCompany = true;
   }
   delete u.pendingCompany;
   delete u.matchedCompany;
   u.state = u.phone ? "idle" : "phone";
   await setUser(ctx.from.id, u);
   await ctx.answerCallbackQuery("🏢 " + u.company);
-  if (u.state === "idle") return ctx.reply(t.ready(u.company), { reply_markup: mainKb(u.lang) });
+  if (u.state === "idle") return finishOnboarding(ctx, u);
   return ctx.reply(t.askPhone, { reply_markup: phoneKb(t) });
 });
 
@@ -530,10 +557,13 @@ bot.on("message", async (ctx) => {
       return ctx.reply(t.companyConfirm(match.name), { reply_markup: kb });
     }
     u.company = match ? match.name : name;
-    if (!match) await redis.sadd("companies", u.company);
+    if (!match) {
+      await redis.sadd("companies", u.company);
+      u.isNewCompany = true;
+    }
     u.state = u.phone ? "idle" : "phone";
     await setUser(ctx.from.id, u);
-    if (u.state === "idle") return ctx.reply(t.ready(u.company), { reply_markup: mainKb(u.lang) });
+    if (u.state === "idle") return finishOnboarding(ctx, u);
     return ctx.reply(t.askPhone, { reply_markup: phoneKb(t) });
   }
 
@@ -552,8 +582,7 @@ bot.on("message", async (ctx) => {
     }
     if (phone) u.phone = phone;
     u.state = "idle";
-    await setUser(ctx.from.id, u);
-    return ctx.reply(t.ready(u.company), { reply_markup: mainKb(u.lang) });
+    return finishOnboarding(ctx, u);
   }
 
   /* Кнопки главного меню */
