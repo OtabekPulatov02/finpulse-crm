@@ -23,13 +23,13 @@
     <nav class="sidebar-nav">
       <a class="nav-item" href="dashboard.html"><i data-lucide="layout-dashboard" class="icon"></i>Дашборд</a>
       <a class="nav-item active" href="tasks.html"><i data-lucide="list-todo" class="icon"></i>Задачи<span class="nav-count">37</span></a>
-      <a class="nav-item" href="calendar.html"><i data-lucide="calendar-days" class="icon"></i>Календарь<span class="nav-count">6</span></a>
+      <a class="nav-item" href="calendar.html"><i data-lucide="calendar-days" class="icon"></i>Календарь</a>
       <a class="nav-item" href="clients.html"><i data-lucide="building-2" class="icon"></i>Клиенты</a>
       <a class="nav-item" href="employees.html"><i data-lucide="users" class="icon"></i>Сотрудники</a>
       <a class="nav-item" href="analytics.html"><i data-lucide="bar-chart-3" class="icon"></i>Аналитика</a>
       <a class="nav-item" href="settings.html" data-role-admin><i data-lucide="settings" class="icon"></i>Настройки</a>
       <div class="nav-section">Интеграции</div>
-      <a class="nav-item" href="telegram.html"><i data-lucide="send" class="icon"></i>Telegram<span class="nav-count">4</span></a>
+      <a class="nav-item" href="telegram.html"><i data-lucide="send" class="icon"></i>Telegram</a>
     </nav>
     <div class="sidebar-footer">
       <a class="sidebar-user" href="employee.html">
@@ -48,8 +48,7 @@
       <button class="topbar-burger" data-sidebar-toggle aria-label="Меню"><i data-lucide="menu" class="icon"></i></button>
       <div class="topbar-search">
         <i data-lucide="search" class="icon"></i>
-        <input type="text" placeholder="Поиск по клиентам, задачам, сотрудникам…">
-        <kbd>Ctrl K</kbd>
+        <input type="text" placeholder="Поиск…">
       </div>
       <div class="topbar-actions">
         <div class="dropdown">
@@ -94,15 +93,15 @@
         </div>
         <div class="page-header-actions">
           <div class="view-toggle" data-view-toggle>
-            <button class="active" data-view="table"><i data-lucide="table-2" class="icon"></i>Таблица</button>
-            <button data-view="kanban"><i data-lucide="kanban" class="icon"></i>Канбан</button>
+            <button data-view="table"><i data-lucide="table-2" class="icon"></i>Таблица</button>
+            <button class="active" data-view="kanban"><i data-lucide="kanban" class="icon"></i>Канбан</button>
           </div>
           <button class="btn btn-primary" data-modal-open="modal-create-task"><i data-lucide="plus" class="icon"></i>Создать задачу</button>
         </div>
       </div>
 
       <!-- ВИД: ТАБЛИЦА -->
-      <section class="card" data-view-panel="table">
+      <section class="card hidden" data-view-panel="table">
         <div class="toolbar">
           <div class="input-icon-wrap">
             <i data-lucide="search" class="icon"></i>
@@ -148,10 +147,10 @@
             </thead>
             <tbody>
               <tr class="clickable" onclick="window.location.href='task.html'">
-                <td><div class="cell-main">Оплатить аренду офиса (120 000 ₽)</div><div class="cell-sub">№ 1255 · из календаря 🔁 ежемесячно</div></td>
+                <td><div class="cell-main">Оплатить аренду офиса (12 000 000 сум)</div><div class="cell-sub">№ 1255 · из календаря 🔁 ежемесячно</div></td>
                 <td>ООО «ТехноСфера»</td>
                 <td><div class="cell-user"><span class="avatar avatar-sm av-1">ЕК</span>Елена Крылова</div></td>
-                <td><span class="badge badge-purple">Новая</span></td>
+                <td onclick="event.stopPropagation()"><select class="select select-status" onchange="showToast('success','Статус обновлён','Клиент уведомлён об изменении.')"><option selected>Новая</option><option>В работе</option><option>Ожидание</option><option>Выполнена</option><option>Отменена</option></select></td>
                 <td><span class="badge badge-blue">Средний</span></td>
                 <td>15.07.2026</td>
                 <td onclick="event.stopPropagation()">
@@ -168,7 +167,7 @@
                 <td><div class="cell-main">Подготовить декларацию по НДС за II квартал</div><div class="cell-sub">№ 1247 · из Telegram</div></td>
                 <td>ООО «ТехноСфера»</td>
                 <td><div class="cell-user"><span class="avatar avatar-sm av-1">ЕК</span>Елена Крылова</div></td>
-                <td><span class="badge badge-blue">В работе</span></td>
+                <td onclick="event.stopPropagation()"><select class="select select-status" onchange="showToast('success','Статус обновлён','Клиент уведомлён об изменении.')"><option>Новая</option><option selected>В работе</option><option>Ожидание</option><option>Выполнена</option><option>Отменена</option></select></td>
                 <td><span class="badge badge-yellow">Высокий</span></td>
                 <td>25.07.2026</td>
                 <td onclick="event.stopPropagation()">
@@ -188,7 +187,7 @@
                 <td><div class="cell-main">Ответ на требование ИФНС № 14-08/2214</div><div class="cell-sub">№ 1252</div></td>
                 <td>ООО «СтройГарант»</td>
                 <td><div class="cell-user"><span class="avatar avatar-sm av-5">ОН</span>Ольга Никитина</div></td>
-                <td><span class="badge badge-purple">Новая</span></td>
+                <td onclick="event.stopPropagation()"><select class="select select-status" onchange="showToast('success','Статус обновлён','Клиент уведомлён об изменении.')"><option selected>Новая</option><option>В работе</option><option>Ожидание</option><option>Выполнена</option><option>Отменена</option></select></td>
                 <td><span class="badge badge-red">Критический</span></td>
                 <td class="text-danger fw-500">10.07.2026</td>
                 <td onclick="event.stopPropagation()">
@@ -208,7 +207,7 @@
                 <td><div class="cell-main">Начислить зарплату за июнь</div><div class="cell-sub">№ 1244</div></td>
                 <td>АО «ВекторПлюс»</td>
                 <td><div class="cell-user"><span class="avatar avatar-sm av-3">АС</span>Анна Смирнова</div></td>
-                <td><span class="badge badge-blue">В работе</span></td>
+                <td onclick="event.stopPropagation()"><select class="select select-status" onchange="showToast('success','Статус обновлён','Клиент уведомлён об изменении.')"><option>Новая</option><option selected>В работе</option><option>Ожидание</option><option>Выполнена</option><option>Отменена</option></select></td>
                 <td><span class="badge badge-blue">Средний</span></td>
                 <td>06.07.2026</td>
                 <td onclick="event.stopPropagation()">
@@ -228,7 +227,7 @@
                 <td><div class="cell-main">Акт сверки с поставщиком «ФармОпт»</div><div class="cell-sub">№ 1249 · из Telegram</div></td>
                 <td>ООО «МедФарм»</td>
                 <td><div class="cell-user"><span class="avatar avatar-sm av-2">ДО</span>Дмитрий Орлов</div></td>
-                <td><span class="badge badge-yellow">Ожидание</span></td>
+                <td onclick="event.stopPropagation()"><select class="select select-status" onchange="showToast('success','Статус обновлён','Клиент уведомлён об изменении.')"><option>Новая</option><option>В работе</option><option selected>Ожидание</option><option>Выполнена</option><option>Отменена</option></select></td>
                 <td><span class="badge badge-blue">Средний</span></td>
                 <td>15.07.2026</td>
                 <td onclick="event.stopPropagation()">
@@ -248,7 +247,7 @@
                 <td><div class="cell-main">Кадровые документы для нового сотрудника</div><div class="cell-sub">№ 1253 · из Telegram</div></td>
                 <td>ООО «Логистик Групп»</td>
                 <td><div class="cell-user"><span class="avatar avatar-sm av-4">ИВ</span>Игорь Васильев</div></td>
-                <td><span class="badge badge-purple">Новая</span></td>
+                <td onclick="event.stopPropagation()"><select class="select select-status" onchange="showToast('success','Статус обновлён','Клиент уведомлён об изменении.')"><option selected>Новая</option><option>В работе</option><option>Ожидание</option><option>Выполнена</option><option>Отменена</option></select></td>
                 <td><span class="badge badge-gray">Низкий</span></td>
                 <td>14.07.2026</td>
                 <td onclick="event.stopPropagation()">
@@ -268,7 +267,7 @@
                 <td><div class="cell-main">6-НДФЛ за полугодие</div><div class="cell-sub">№ 1240</div></td>
                 <td>ООО «МедФарм»</td>
                 <td><div class="cell-user"><span class="avatar avatar-sm av-2">ДО</span>Дмитрий Орлов</div></td>
-                <td><span class="badge badge-green">Выполнена</span></td>
+                <td onclick="event.stopPropagation()"><select class="select select-status" onchange="showToast('success','Статус обновлён','Клиент уведомлён об изменении.')"><option>Новая</option><option>В работе</option><option>Ожидание</option><option selected>Выполнена</option><option>Отменена</option></select></td>
                 <td><span class="badge badge-yellow">Высокий</span></td>
                 <td>03.07.2026</td>
                 <td onclick="event.stopPropagation()">
@@ -287,7 +286,7 @@
                 <td><div class="cell-main">Переход на электронный документооборот</div><div class="cell-sub">№ 1218</div></td>
                 <td>ИП Соколова А. В.</td>
                 <td><div class="cell-user"><span class="avatar avatar-sm av-2">ДО</span>Дмитрий Орлов</div></td>
-                <td><span class="badge badge-gray">Отменена</span></td>
+                <td onclick="event.stopPropagation()"><select class="select select-status" onchange="showToast('success','Статус обновлён','Клиент уведомлён об изменении.')"><option>Новая</option><option>В работе</option><option>Ожидание</option><option>Выполнена</option><option selected>Отменена</option></select></td>
                 <td><span class="badge badge-gray">Низкий</span></td>
                 <td>—</td>
                 <td onclick="event.stopPropagation()">
@@ -328,7 +327,7 @@
       </section>
 
       <!-- ВИД: КАНБАН -->
-      <section class="kanban hidden" data-view-panel="kanban">
+      <section class="kanban" data-view-panel="kanban">
         <div class="kanban-col">
           <div class="kanban-col-header"><span class="dot" style="background:var(--purple)"></span>Новая<span class="count">3</span></div>
           <div class="kanban-cards">

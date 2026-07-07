@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Telegram — Finpulse CRM</title>
+  <title>Интеграции — Finpulse CRM</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -23,13 +23,13 @@
     <nav class="sidebar-nav">
       <a class="nav-item" href="dashboard.html"><i data-lucide="layout-dashboard" class="icon"></i>Дашборд</a>
       <a class="nav-item" href="tasks.html"><i data-lucide="list-todo" class="icon"></i>Задачи<span class="nav-count">37</span></a>
-      <a class="nav-item" href="calendar.html"><i data-lucide="calendar-days" class="icon"></i>Календарь<span class="nav-count">6</span></a>
+      <a class="nav-item" href="calendar.html"><i data-lucide="calendar-days" class="icon"></i>Календарь</a>
       <a class="nav-item" href="clients.html"><i data-lucide="building-2" class="icon"></i>Клиенты</a>
       <a class="nav-item" href="employees.html"><i data-lucide="users" class="icon"></i>Сотрудники</a>
       <a class="nav-item" href="analytics.html"><i data-lucide="bar-chart-3" class="icon"></i>Аналитика</a>
       <a class="nav-item" href="settings.html" data-role-admin><i data-lucide="settings" class="icon"></i>Настройки</a>
       <div class="nav-section">Интеграции</div>
-      <a class="nav-item active" href="telegram.html"><i data-lucide="send" class="icon"></i>Telegram<span class="nav-count">4</span></a>
+      <a class="nav-item active" href="telegram.html"><i data-lucide="send" class="icon"></i>Telegram</a>
     </nav>
     <div class="sidebar-footer">
       <a class="sidebar-user" href="employee.html">
@@ -48,8 +48,7 @@
       <button class="topbar-burger" data-sidebar-toggle aria-label="Меню"><i data-lucide="menu" class="icon"></i></button>
       <div class="topbar-search">
         <i data-lucide="search" class="icon"></i>
-        <input type="text" placeholder="Поиск по клиентам, задачам, сотрудникам…">
-        <kbd>Ctrl K</kbd>
+        <input type="text" placeholder="Поиск…">
       </div>
       <div class="topbar-actions">
         <div class="dropdown">
@@ -89,148 +88,153 @@
     <main class="page">
       <div class="page-header">
         <div>
-          <h1>Интеграция с Telegram</h1>
-          <p class="subtitle">Демонстрация: обращение клиента автоматически превращается в задачу</p>
-        </div>
-        <div class="page-header-actions">
-          <button class="btn btn-secondary" data-modal-open="modal-distribution"><i data-lucide="settings-2" class="icon"></i>Правила распределения</button>
-          <button class="btn btn-primary" id="tg-play"><i data-lucide="play" class="icon"></i>Запустить демо</button>
+          <h1>Интеграции</h1>
+          <p class="subtitle">Telegram-бот и база данных</p>
         </div>
       </div>
 
-      <!-- Шаги потока -->
-      <section class="tg-flow">
-        <div class="card tg-step">
-          <div class="step-num">1</div>
-          <h3>Сообщение клиента</h3>
-          <p>Клиент пишет в Telegram-бот компании. Сообщение и вложения попадают в систему.</p>
-        </div>
-        <div class="card tg-step">
-          <div class="step-num">2</div>
-          <h3>Создание задачи</h3>
-          <p>Система создаёт задачу, привязывает её к карточке клиента и прикрепляет файлы.</p>
-        </div>
-        <div class="card tg-step">
-          <div class="step-num">3</div>
-          <h3>Автораспределение</h3>
-          <p>По правилам распределения задача назначается ответственному бухгалтеру клиента.</p>
-        </div>
-        <div class="card tg-step">
-          <div class="step-num">4</div>
-          <h3>Уведомление бухгалтеру</h3>
-          <p>Исполнитель получает уведомление в системе и в Telegram, клиенту уходит подтверждение.</p>
-        </div>
-      </section>
-
-      <div class="tg-demo-grid">
-        <!-- Телефон -->
-        <div class="phone">
-          <div class="phone-header">
-            <span class="avatar avatar-sm" style="background:#2AABEE;"><i data-lucide="send" class="icon icon-sm"></i></span>
-            <div>
-              <div class="ph-name">Finpulse · Бухгалтерия (бот)</div>
-              <div class="ph-status">онлайн</div>
-            </div>
-          </div>
-          <div class="phone-body" id="tg-chat">
-            <div class="chat-msg out">Здравствуйте! Это бот бухгалтерии «Finpulse». Напишите ваш вопрос — мы создадим задачу и назначим специалиста.<span class="msg-time">13:58</span></div>
-          </div>
-        </div>
-
-        <!-- Что происходит в системе -->
+      <div class="dash-grid">
+        <!-- Telegram-бот -->
         <section class="card">
           <div class="card-header">
-            <h2>Что происходит в системе</h2>
-            <span class="badge badge-gray no-dot">события демо</span>
+            <h2 class="flex items-center gap-8"><i data-lucide="send" class="icon" style="color:var(--accent);"></i>Telegram-бот</h2>
+            <span class="badge badge-green">Подключён</span>
           </div>
           <div class="card-body">
-            <div class="timeline" id="tg-events">
-              <div class="timeline-item hidden">
-                <div class="tl-icon ic-blue"><i data-lucide="file-plus-2" class="icon"></i></div>
-                <div class="tl-body">
-                  <div class="tl-text">Создана задача <b>№ 1247 «Требование ИФНС по НДС»</b> для клиента <a href="client.html">ООО «ТехноСфера»</a>, вложение прикреплено</div>
-                  <div class="tl-time">14:02:11</div>
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Название бота</label>
+                <input type="text" class="input" value="Finpulse · Бухгалтерия">
+              </div>
+              <div class="form-group">
+                <label class="form-label">Username</label>
+                <input type="text" class="input" value="@finpulse_crm_bot">
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Описание бота</label>
+              <textarea class="textarea" style="min-height:64px;">Приём задач от клиентов: текст и файлы, выбор языка, уведомления о статусе.</textarea>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Токен бота</label>
+              <div class="masked-row">
+                <input type="password" class="input" value="0000000000:XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX" readonly>
+                <button class="btn btn-secondary btn-icon" data-tooltip="Показать" data-toast="info|Токен скрыт|Просмотр доступен только супер-админу."><i data-lucide="eye" class="icon"></i></button>
+                <button class="btn btn-secondary btn-icon" data-tooltip="Копировать" data-toast="success|Скопировано|Токен в буфере обмена."><i data-lucide="copy" class="icon"></i></button>
+              </div>
+              <div class="form-hint">Выдаётся в @BotFather. При смене токена обновите переменную и webhook.</div>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Webhook URL</label>
+              <div class="masked-row">
+                <input type="text" class="input" value="https://finpulse-crm.vercel.app/api/bot" readonly>
+                <button class="btn btn-secondary btn-icon" data-tooltip="Копировать" data-toast="success|Скопировано|Адрес в буфере обмена."><i data-lucide="copy" class="icon"></i></button>
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Код привязки группы</label>
+                <div class="masked-row">
+                  <input type="password" class="input" value="finpulse2026" readonly>
+                  <button class="btn btn-secondary btn-icon" data-tooltip="Копировать" data-toast="success|Скопировано|Код в буфере обмена."><i data-lucide="copy" class="icon"></i></button>
                 </div>
               </div>
-              <div class="timeline-item hidden">
-                <div class="tl-icon ic-purple"><i data-lucide="user-check" class="icon"></i></div>
-                <div class="tl-body">
-                  <div class="tl-text">Правило «Telegram → ответственный бухгалтер»: исполнителем назначена <b>Елена Крылова</b>, приоритет <b>Средний</b>, срок <b>2 рабочих дня</b></div>
-                  <div class="tl-time">14:02:12</div>
-                </div>
-              </div>
-              <div class="timeline-item hidden">
-                <div class="tl-icon ic-green"><i data-lucide="bell-ring" class="icon"></i></div>
-                <div class="tl-body">
-                  <div class="tl-text">Уведомление отправлено <b>Елене Крыловой</b> (система + Telegram), клиент получил подтверждение с номером задачи</div>
-                  <div class="tl-time">14:02:13</div>
+              <div class="form-group">
+                <label class="form-label">Группа бухгалтеров</label>
+                <div class="flex items-center gap-8" style="padding:8px 0;">
+                  <span class="badge badge-green">Привязана</span>
+                  <span class="text-secondary text-sm">команда /bind в группе</span>
                 </div>
               </div>
             </div>
-            <div class="empty-state" id="tg-empty" style="padding:32px 20px;">
-              <div class="es-icon"><i data-lucide="circle-play" class="icon"></i></div>
-              <h3>Демонстрация не запущена</h3>
-              <p>Нажмите «Запустить демо», чтобы увидеть полный путь обращения: сообщение → задача → автораспределение → уведомление.</p>
+
+            <div class="flex items-center justify-between gap-12" style="margin-top:4px;">
+              <span class="text-sm fw-500">Уведомлять группу о новых задачах</span>
+              <label class="toggle"><input type="checkbox" checked><span class="slider"></span></label>
+            </div>
+            <div class="flex items-center justify-between gap-12" style="margin-top:12px;">
+              <span class="text-sm fw-500">Уведомлять клиента о смене статуса</span>
+              <label class="toggle"><input type="checkbox" checked><span class="slider"></span></label>
             </div>
           </div>
+          <div class="card-footer flex items-center justify-between">
+            <button class="btn btn-secondary" data-toast="success|Подключение проверено|getMe: @finpulse_crm_bot, webhook активен."><i data-lucide="activity" class="icon"></i>Проверить</button>
+            <button class="btn btn-primary" data-toast="success|Сохранено|Настройки бота обновлены."><i data-lucide="check" class="icon"></i>Сохранить</button>
+          </div>
         </section>
-      </div>
 
-      <!-- Последние обращения -->
-      <section class="card mt-24">
-        <div class="card-header">
-          <h2>Последние обращения из Telegram</h2>
-          <span class="badge badge-blue">4 новых</span>
+        <!-- База данных -->
+        <div class="dash-col">
+          <section class="card">
+            <div class="card-header">
+              <h2 class="flex items-center gap-8"><i data-lucide="database" class="icon" style="color:var(--success);"></i>База данных · Redis</h2>
+              <span class="badge badge-green">Подключена</span>
+            </div>
+            <div class="card-body">
+              <div class="form-group">
+                <label class="form-label">REST URL</label>
+                <div class="masked-row">
+                  <input type="password" class="input" value="https://xxxxxx.upstash.io" readonly>
+                  <button class="btn btn-secondary btn-icon" data-tooltip="Копировать" data-toast="success|Скопировано|Адрес в буфере обмена."><i data-lucide="copy" class="icon"></i></button>
+                </div>
+              </div>
+              <div class="form-group">
+                <label class="form-label">REST Token</label>
+                <div class="masked-row">
+                  <input type="password" class="input" value="AXXXXXXXXXXXXXXXXXXXXXXXXXXXX" readonly>
+                  <button class="btn btn-secondary btn-icon" data-tooltip="Копировать" data-toast="success|Скопировано|Токен в буфере обмена."><i data-lucide="copy" class="icon"></i></button>
+                </div>
+              </div>
+
+              <div class="info-grid" style="grid-template-columns:1fr 1fr; margin:4px 0 16px;">
+                <div class="info-item"><div class="info-label">Провайдер</div><div class="info-value">Upstash · Free</div></div>
+                <div class="info-item"><div class="info-label">Шифрование</div><div class="info-value">TLS</div></div>
+                <div class="info-item"><div class="info-label">Хранится</div><div class="info-value">профили, задачи, статусы</div></div>
+                <div class="info-item"><div class="info-label">Связи</div><div class="info-value">группа, счётчик задач</div></div>
+              </div>
+
+              <div class="info-note">
+                <i data-lucide="shield-check" class="icon"></i>
+                <span>Ключи задаются в Vercel → Environment Variables. После изменения переменных нужен повторный деплой. Не удаляйте ключи <b>task:*</b> и <b>user:*</b> — это активные данные.</span>
+              </div>
+            </div>
+            <div class="card-footer" style="text-align:right;">
+              <button class="btn btn-secondary" data-toast="success|Соединение активно|PING → PONG · 14 мс."><i data-lucide="activity" class="icon"></i>Проверить соединение</button>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="card-header"><h2>Переменные окружения</h2><span class="badge badge-gray no-dot">Vercel</span></div>
+            <div>
+              <div class="settings-row">
+                <div><div class="sr-title" style="font-family:ui-monospace,Menlo,monospace;">TELEGRAM_BOT_TOKEN</div><div class="sr-desc">токен из @BotFather</div></div>
+                <span class="badge badge-green">Задана</span>
+              </div>
+              <div class="settings-row">
+                <div><div class="sr-title" style="font-family:ui-monospace,Menlo,monospace;">BIND_CODE</div><div class="sr-desc">код привязки группы</div></div>
+                <span class="badge badge-green">Задана</span>
+              </div>
+              <div class="settings-row">
+                <div><div class="sr-title" style="font-family:ui-monospace,Menlo,monospace;">UPSTASH_REDIS_REST_URL</div><div class="sr-desc">адрес базы данных</div></div>
+                <span class="badge badge-green">Задана</span>
+              </div>
+              <div class="settings-row">
+                <div><div class="sr-title" style="font-family:ui-monospace,Menlo,monospace;">UPSTASH_REDIS_REST_TOKEN</div><div class="sr-desc">ключ доступа к базе</div></div>
+                <span class="badge badge-green">Задана</span>
+              </div>
+            </div>
+          </section>
         </div>
-        <div class="table-wrap">
-          <table class="table">
-            <thead><tr><th>Клиент</th><th>Сообщение</th><th>Получено</th><th>Статус</th><th></th></tr></thead>
-            <tbody>
-              <tr>
-                <td><div class="cell-user"><span class="avatar avatar-sm av-3">ТС</span>ООО «ТехноСфера»</div></td>
-                <td class="text-secondary">Пришло требование из налоговой по НДС, нужна помощь до пятницы…</td>
-                <td>сегодня, 14:02</td>
-                <td><span class="badge badge-green">Задача создана</span></td>
-                <td><a class="btn btn-ghost btn-sm" href="task.html">Открыть задачу</a></td>
-              </tr>
-              <tr>
-                <td><div class="cell-user"><span class="avatar avatar-sm av-4">МФ</span>ООО «МедФарм»</div></td>
-                <td class="text-secondary">Нужен акт сверки с поставщиком «ФармОпт» за первое полугодие.</td>
-                <td>сегодня, 12:47</td>
-                <td><span class="badge badge-green">Задача создана</span></td>
-                <td><a class="btn btn-ghost btn-sm" href="task.html">Открыть задачу</a></td>
-              </tr>
-              <tr>
-                <td><div class="cell-user"><span class="avatar avatar-sm av-7">ЛГ</span>ООО «Логистик Групп»</div></td>
-                <td class="text-secondary">Какие документы нужны для приёма нового сотрудника с 15 июля?</td>
-                <td>сегодня, 09:15</td>
-                <td><span class="badge badge-purple">Новое</span></td>
-                <td><button class="btn btn-secondary btn-sm" data-modal-open="modal-create-task">Создать задачу</button></td>
-              </tr>
-              <tr>
-                <td><div class="cell-user"><span class="avatar avatar-sm av-6">ВП</span>АО «ВекторПлюс»</div></td>
-                <td class="text-secondary">Подтвердите, пожалуйста, получение банковской выписки за июнь.</td>
-                <td>вчера, 18:30</td>
-                <td><span class="badge badge-purple">Новое</span></td>
-                <td><button class="btn btn-secondary btn-sm" data-modal-open="modal-create-task">Создать задачу</button></td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
+      </div>
     </main>
   </div>
 </div>
 
 <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
 <script src="assets/js/app.js"></script>
-<script>
-  // Скрываем заглушку при запуске демо (только для этой страницы)
-  document.addEventListener("DOMContentLoaded", function () {
-    var play = document.getElementById("tg-play");
-    var empty = document.getElementById("tg-empty");
-    if (play && empty) play.addEventListener("click", function () { empty.classList.add("hidden"); });
-  });
-</script>
 </body>
 </html>
