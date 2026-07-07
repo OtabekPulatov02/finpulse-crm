@@ -151,7 +151,7 @@
 
 <!-- Модалка: новое напоминание -->
 <div class="modal-backdrop" id="modal-reminder">
-  <div class="modal modal-lg" role="dialog" aria-modal="true">
+  <div class="modal" role="dialog" aria-modal="true">
     <div class="modal-header">
       <h2>Новое напоминание</h2>
       <button class="modal-close" data-modal-close aria-label="Закрыть"><i data-lucide="x" class="icon"></i></button>
@@ -160,17 +160,17 @@
       <div class="rem-types">
         <button type="button" class="rem-type-btn" data-type="tax">
           <span class="rt-emoji">🧾</span>
-          <span><span class="rt-name">Налог / отчёт</span><br><span class="rt-desc">НДС, УСН, зарплатные, статистика</span></span>
+          <span><span class="rt-name">Налог / отчёт</span></span>
         </button>
         <button type="button" class="rem-type-btn active" data-type="pay">
           <span class="rt-emoji">💳</span>
-          <span><span class="rt-name">Платёж фирмы</span><br><span class="rt-desc">аренда, интернет, лизинг, страховка</span></span>
+          <span><span class="rt-name">Платёж фирмы</span></span>
         </button>
       </div>
 
       <div class="form-group">
-        <label class="form-label">Название <span class="req">*</span></label>
-        <input type="text" class="input" id="rem-title" placeholder="Аренда офиса">
+        <label class="form-label">Что напомнить <span class="req">*</span></label>
+        <input type="text" class="input" id="rem-title" placeholder="Аренда офиса — 12 000 000 сум">
         <div class="chip-row" id="rem-suggest"></div>
       </div>
 
@@ -188,81 +188,59 @@
           </select>
         </div>
         <div class="form-group">
-          <label class="form-label">Сумма <span class="text-muted">(необязательно)</span></label>
-          <input type="text" class="input" id="rem-amount" placeholder="12 000 000 сум">
+          <label class="form-label">Дата <span class="req">*</span></label>
+          <input type="date" class="input" id="rem-date">
         </div>
       </div>
 
       <div class="form-row">
         <div class="form-group">
-          <label class="form-label">Первая дата <span class="req">*</span></label>
-          <input type="date" class="input" id="rem-date">
+          <label class="form-label">Повтор</label>
+          <select class="select" id="rem-repeat">
+            <option>Однократно</option>
+            <option>Ежедневно</option>
+            <option>Еженедельно</option>
+            <option selected>Ежемесячно</option>
+            <option>Ежеквартально</option>
+            <option>Ежегодно</option>
+          </select>
         </div>
         <div class="form-group">
-          <label class="form-label">Время напоминания</label>
-          <input type="time" class="input" id="rem-time" value="09:00">
+          <label class="form-label">Напомнить</label>
+          <select class="select" id="rem-remind">
+            <option>в день события</option>
+            <option>за 1 день</option>
+            <option selected>за 3 дня</option>
+            <option>за неделю</option>
+          </select>
         </div>
       </div>
 
-      <div class="form-group">
-        <label class="form-label">Повтор</label>
-        <div class="chip-row" id="rem-repeat" style="margin-top:2px;">
-          <button type="button" class="chip">Однократно</button>
-          <button type="button" class="chip">Ежечасно</button>
-          <button type="button" class="chip">Ежедневно</button>
-          <button type="button" class="chip">Еженедельно</button>
-          <button type="button" class="chip active">Ежемесячно</button>
-          <button type="button" class="chip">Ежеквартально</button>
-          <button type="button" class="chip">Ежегодно</button>
-        </div>
-      </div>
-
-      <div class="form-group">
-        <label class="form-label">Напомнить</label>
-        <div class="chip-row" id="rem-remind" style="margin-top:2px;">
-          <button type="button" class="chip">в день события</button>
-          <button type="button" class="chip">за 1 день</button>
-          <button type="button" class="chip active">за 3 дня</button>
-          <button type="button" class="chip">за неделю</button>
-        </div>
-      </div>
-
-      <div class="rem-summary">
-        <i data-lucide="bell-ring" class="icon"></i>
-        <span id="rem-summary-text">«Напоминание» · ежемесячно · Telegram-группа за 3 дня</span>
-      </div>
-
-      <div class="rem-toggles">
-        <div class="rem-toggle-row">
-          <span class="rt-label"><i data-lucide="send" class="icon"></i>Уведомить Telegram-группу бухгалтеров</span>
-          <label class="toggle"><input type="checkbox" checked><span class="slider"></span></label>
-        </div>
-        <div class="rem-toggle-row">
-          <span class="rt-label"><i data-lucide="list-plus" class="icon"></i>Создать задачу в трекере при приближении срока</span>
-          <label class="toggle"><input type="checkbox" checked><span class="slider"></span></label>
-        </div>
+      <div class="text-muted text-sm flex items-center gap-8" style="margin-top:2px;">
+        <i data-lucide="send" class="icon icon-sm"></i>
+        Бот напомнит в Telegram-группе и создаст задачу при приближении срока.
       </div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-secondary" data-modal-close>Отмена</button>
-      <button class="btn btn-primary" id="rem-save"><i data-lucide="alarm-clock-plus" class="icon"></i>Создать напоминание</button>
+      <button class="btn btn-primary" id="rem-save"><i data-lucide="check" class="icon"></i>Создать</button>
     </div>
   </div>
 </div>
 
-<!-- Drawer: события дня -->
+<!-- Модалка: события дня -->
 <div class="drawer-backdrop" id="drawer-day">
   <aside class="drawer" role="dialog" aria-modal="true">
     <div class="drawer-header">
       <div>
-        <div class="text-muted text-xs" style="text-transform:uppercase; letter-spacing:0.05em; font-weight:600;">События дня</div>
-        <h2 id="day-title" style="font-size:16px; margin-top:2px;">—</h2>
+        <h2 id="day-title" style="font-size:17px;">—</h2>
+        <div class="text-muted text-sm" id="day-count" style="margin-top:2px;">—</div>
       </div>
       <button class="modal-close" data-drawer-close aria-label="Закрыть"><i data-lucide="x" class="icon"></i></button>
     </div>
     <div class="drawer-body" id="day-events"></div>
     <div class="drawer-footer">
-      <button class="btn btn-primary" style="flex:1;" data-modal-open="modal-reminder" data-drawer-close><i data-lucide="alarm-clock-plus" class="icon"></i>Добавить напоминание</button>
+      <button class="btn btn-primary" style="flex:1;" id="day-add-btn" data-modal-open="modal-reminder" data-drawer-close><i data-lucide="plus" class="icon"></i>Добавить на этот день</button>
     </div>
   </aside>
 </div>

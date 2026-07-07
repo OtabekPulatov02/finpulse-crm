@@ -99,7 +99,7 @@
       <div class="page-header">
         <div>
           <h1>Настройки</h1>
-          <p class="subtitle">Пользователи, роли, статусы, автораспределение и уведомления</p>
+          <p class="subtitle">Пользователи, роли, статусы, справочники и уведомления</p>
         </div>
       </div>
 
@@ -107,6 +107,7 @@
         <button class="tab-btn active" data-tab-target="tab-users"><i data-lucide="users" class="icon icon-sm"></i>Пользователи</button>
         <button class="tab-btn" data-tab-target="tab-roles"><i data-lucide="shield" class="icon icon-sm"></i>Роли</button>
         <button class="tab-btn" data-tab-target="tab-statuses"><i data-lucide="tags" class="icon icon-sm"></i>Статусы</button>
+        <button class="tab-btn" data-tab-target="tab-dicts"><i data-lucide="book-open" class="icon icon-sm"></i>Справочники</button>
         <button class="tab-btn" data-tab-target="tab-rules"><i data-lucide="git-branch" class="icon icon-sm"></i>Правила распределения</button>
         <button class="tab-btn" data-tab-target="tab-notifications"><i data-lucide="bell" class="icon icon-sm"></i>Уведомления</button>
       </div>
@@ -321,6 +322,81 @@
             </div>
           </div>
         </section>
+      </div>
+
+      <!-- Справочники -->
+      <div class="tab-panel" id="tab-dicts" data-tab-scope="settings">
+        <div class="info-note mb-16">
+          <i data-lucide="sparkles" class="icon"></i>
+          <span>Справочники редактируются без разработчика: добавляйте свои типы, категории и интервалы — календарь, задачи и бот подхватят их автоматически.</span>
+        </div>
+        <div class="dash-grid" style="grid-template-columns:1fr 1fr;">
+          <section class="card">
+            <div class="card-header"><h2>Типы событий календаря</h2></div>
+            <div>
+              <div class="settings-row">
+                <div class="flex items-center gap-12"><span class="badge badge-purple">Налоги и отчёты</span><span class="sr-desc">срок в госорганы</span></div>
+                <button class="btn btn-ghost btn-icon btn-sm" data-toast="info|Редактирование|Название и цвет типа." aria-label="Редактировать"><i data-lucide="pencil" class="icon"></i></button>
+              </div>
+              <div class="settings-row">
+                <div class="flex items-center gap-12"><span class="badge badge-blue">Платежи фирм</span><span class="sr-desc">регулярные оплаты</span></div>
+                <button class="btn btn-ghost btn-icon btn-sm" data-toast="info|Редактирование|Название и цвет типа." aria-label="Редактировать"><i data-lucide="pencil" class="icon"></i></button>
+              </div>
+              <div class="settings-row">
+                <div class="flex items-center gap-12"><span class="badge badge-yellow">Задачи</span><span class="sr-desc">дедлайны из трекера</span></div>
+                <span class="text-muted text-xs">системный</span>
+              </div>
+              <div class="settings-row" style="gap:8px;">
+                <input type="text" class="input" placeholder="Новый тип" style="flex:1;">
+                <button class="btn btn-secondary btn-sm" data-toast="success|Тип добавлен|Появится в календаре и фильтрах."><i data-lucide="plus" class="icon"></i>Добавить</button>
+              </div>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="card-header"><h2>Категории платежей</h2></div>
+            <div>
+              <div class="settings-row"><span class="sr-title">Аренда</span><button class="btn btn-ghost btn-icon btn-sm" data-toast="info|Редактирование|Название категории." aria-label="Редактировать"><i data-lucide="pencil" class="icon"></i></button></div>
+              <div class="settings-row"><span class="sr-title">Интернет и связь</span><button class="btn btn-ghost btn-icon btn-sm" data-toast="info|Редактирование|Название категории." aria-label="Редактировать"><i data-lucide="pencil" class="icon"></i></button></div>
+              <div class="settings-row"><span class="sr-title">Коммунальные услуги</span><button class="btn btn-ghost btn-icon btn-sm" data-toast="info|Редактирование|Название категории." aria-label="Редактировать"><i data-lucide="pencil" class="icon"></i></button></div>
+              <div class="settings-row"><span class="sr-title">Лизинг</span><button class="btn btn-ghost btn-icon btn-sm" data-toast="info|Редактирование|Название категории." aria-label="Редактировать"><i data-lucide="pencil" class="icon"></i></button></div>
+              <div class="settings-row"><span class="sr-title">Страховка</span><button class="btn btn-ghost btn-icon btn-sm" data-toast="info|Редактирование|Название категории." aria-label="Редактировать"><i data-lucide="pencil" class="icon"></i></button></div>
+              <div class="settings-row" style="gap:8px;">
+                <input type="text" class="input" placeholder="Новая категория" style="flex:1;">
+                <button class="btn btn-secondary btn-sm" data-toast="success|Категория добавлена|Появится в подсказках напоминаний."><i data-lucide="plus" class="icon"></i>Добавить</button>
+              </div>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="card-header"><h2>Интервалы напоминаний</h2></div>
+            <div>
+              <div class="settings-row"><span class="sr-title">В день события</span><button class="btn btn-ghost btn-icon btn-sm" data-toast="info|Редактирование|Интервал напоминания." aria-label="Редактировать"><i data-lucide="pencil" class="icon"></i></button></div>
+              <div class="settings-row"><span class="sr-title">За 1 день</span><button class="btn btn-ghost btn-icon btn-sm" data-toast="info|Редактирование|Интервал напоминания." aria-label="Редактировать"><i data-lucide="pencil" class="icon"></i></button></div>
+              <div class="settings-row"><div><span class="sr-title">За 3 дня</span><div class="sr-desc">по умолчанию</div></div><button class="btn btn-ghost btn-icon btn-sm" data-toast="info|Редактирование|Интервал напоминания." aria-label="Редактировать"><i data-lucide="pencil" class="icon"></i></button></div>
+              <div class="settings-row"><span class="sr-title">За неделю</span><button class="btn btn-ghost btn-icon btn-sm" data-toast="info|Редактирование|Интервал напоминания." aria-label="Редактировать"><i data-lucide="pencil" class="icon"></i></button></div>
+              <div class="settings-row" style="gap:8px;">
+                <input type="text" class="input" placeholder="Например: за 2 недели" style="flex:1;">
+                <button class="btn btn-secondary btn-sm" data-toast="success|Интервал добавлен|Появится в выборе «Напомнить»."><i data-lucide="plus" class="icon"></i>Добавить</button>
+              </div>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="card-header"><h2>Периодичность повторов</h2></div>
+            <div>
+              <div class="settings-row"><span class="sr-title">Однократно</span><span class="text-muted text-xs">системный</span></div>
+              <div class="settings-row"><span class="sr-title">Ежедневно</span><button class="btn btn-ghost btn-icon btn-sm" data-toast="info|Редактирование|Периодичность повтора." aria-label="Редактировать"><i data-lucide="pencil" class="icon"></i></button></div>
+              <div class="settings-row"><div><span class="sr-title">Ежемесячно</span><div class="sr-desc">по умолчанию</div></div><button class="btn btn-ghost btn-icon btn-sm" data-toast="info|Редактирование|Периодичность повтора." aria-label="Редактировать"><i data-lucide="pencil" class="icon"></i></button></div>
+              <div class="settings-row"><span class="sr-title">Ежеквартально</span><button class="btn btn-ghost btn-icon btn-sm" data-toast="info|Редактирование|Периодичность повтора." aria-label="Редактировать"><i data-lucide="pencil" class="icon"></i></button></div>
+              <div class="settings-row"><span class="sr-title">Ежегодно</span><button class="btn btn-ghost btn-icon btn-sm" data-toast="info|Редактирование|Периодичность повтора." aria-label="Редактировать"><i data-lucide="pencil" class="icon"></i></button></div>
+              <div class="settings-row" style="gap:8px;">
+                <input type="text" class="input" placeholder="Например: каждые 2 недели" style="flex:1;">
+                <button class="btn btn-secondary btn-sm" data-toast="success|Периодичность добавлена|Появится в выборе «Повтор»."><i data-lucide="plus" class="icon"></i>Добавить</button>
+              </div>
+            </div>
+          </section>
+        </div>
       </div>
 
       <!-- Правила распределения -->
