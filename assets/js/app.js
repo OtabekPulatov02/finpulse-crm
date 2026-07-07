@@ -42,11 +42,11 @@
         <div class="form-row">
           <div class="form-group">
             <label class="form-label">Контактное лицо</label>
-            <input type="text" class="input" placeholder="Иванов Иван Иванович">
+            <input type="text" class="input" placeholder="ФИО">
           </div>
           <div class="form-group">
             <label class="form-label">Телефон</label>
-            <input type="tel" class="input" placeholder="+7 (900) 000-00-00">
+            <input type="tel" class="input" placeholder="+998 90 000-00-00">
           </div>
         </div>
         <div class="form-row">
@@ -67,7 +67,7 @@
         </div>
         <div class="form-group">
           <label class="form-label">Комментарий</label>
-          <textarea class="textarea" placeholder="Дополнительная информация о клиенте"></textarea>
+          <textarea class="textarea" placeholder="Комментарий"></textarea>
         </div>
       </div>
       <div class="modal-footer">
@@ -89,7 +89,7 @@
       <div class="modal-body">
         <div class="form-group">
           <label class="form-label">Название задачи <span class="req">*</span></label>
-          <input type="text" class="input" placeholder="Например: Подготовить декларацию по НДС">
+          <input type="text" class="input" placeholder="Название задачи">
         </div>
         <div class="form-row">
           <div class="form-group">
@@ -131,12 +131,11 @@
               <input type="text" class="input has-icon-right" placeholder="ДД.ММ.ГГГГ" value="20.07.2026">
               <i data-lucide="calendar" class="icon icon-right"></i>
             </div>
-            <div class="form-hint">Выбор даты — макет календаря</div>
           </div>
         </div>
         <div class="form-group">
           <label class="form-label">Описание</label>
-          <textarea class="textarea" placeholder="Что нужно сделать, сроки, особенности"></textarea>
+          <textarea class="textarea" placeholder="Описание"></textarea>
         </div>
       </div>
       <div class="modal-footer">
@@ -193,7 +192,7 @@
           </div>
           <div class="form-group">
             <label class="form-label">Телефон</label>
-            <input type="tel" class="input" placeholder="+7 (900) 000-00-00">
+            <input type="tel" class="input" placeholder="+998 90 000-00-00">
           </div>
         </div>
         <div class="form-group">
@@ -321,16 +320,9 @@
           <div class="fw-500">Перетащите файл сюда или нажмите для выбора</div>
           <div class="text-muted text-sm mt-8">PDF, DOCX, XLSX, JPG — до 25 МБ</div>
         </div>
-        <div class="error-state mt-16">
-          <i data-lucide="alert-circle" class="icon"></i>
-          <div>
-            <strong>Пример состояния ошибки</strong>
-            <p>Файл «выписка_январь.zip» превышает допустимый размер 25 МБ.</p>
-          </div>
-        </div>
         <div class="form-group mt-16">
           <label class="form-label">Описание файла</label>
-          <input type="text" class="input" placeholder="Например: Акт сверки за июнь">
+          <input type="text" class="input" placeholder="Описание файла">
         </div>
       </div>
       <div class="modal-footer">
