@@ -89,7 +89,7 @@
       <div class="page-header">
         <div>
           <h1>Клиенты</h1>
-          <p class="subtitle">48 компаний на обслуживании · 3 новых за месяц</p>
+          <p class="subtitle">48 компаний · 1 из бота ожидает активации</p>
         </div>
         <div class="page-header-actions">
           <button class="btn btn-primary" data-role-admin data-modal-open="modal-create-client"><i data-lucide="plus" class="icon"></i>Добавить клиента</button>
@@ -134,6 +134,25 @@
               </tr>
             </thead>
             <tbody>
+              <tr class="clickable" onclick="window.location.href='client.html'">
+                <td><div class="cell-main">MCHJ «Барака Транс»</div><div class="cell-sub">зарегистрирован через бота · сегодня</div></td>
+                <td class="sensitive">Шахзод Каримов</td>
+                <td class="sensitive">+998 90 123-45-67</td>
+                <td><span class="text-muted">не назначен</span></td>
+                <td><span class="badge badge-cyan">Из бота</span></td>
+                <td><span class="text-muted">1</span></td>
+                <td onclick="event.stopPropagation()">
+                  <div class="dropdown">
+                    <button class="btn btn-ghost btn-icon btn-sm" data-dropdown-toggle aria-label="Действия"><i data-lucide="more-horizontal" class="icon"></i></button>
+                    <div class="dropdown-menu">
+                      <button class="dropdown-item" data-role-admin data-modal-open="modal-create-client"><i data-lucide="clipboard-check" class="icon"></i>Заполнить и активировать</button>
+                      <a class="dropdown-item" href="client.html"><i data-lucide="external-link" class="icon"></i>Открыть карточку</a>
+                      <div class="dropdown-divider"></div>
+                      <button class="dropdown-item danger" data-role-admin data-modal-open="modal-delete"><i data-lucide="trash-2" class="icon"></i>Удалить</button>
+                    </div>
+                  </div>
+                </td>
+              </tr>
               <tr class="clickable" onclick="window.location.href='client.html'">
                 <td><div class="cell-main">ООО «ТехноСфера»</div><div class="cell-sub">ИНН 7701234567 · УСН</div></td>
                 <td class="sensitive">Павел Литвинов</td>
