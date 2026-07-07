@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Календарь — Finpulse CRM</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="assets/css/base.css">
+  <link rel="stylesheet" href="assets/css/layout.css">
+  <link rel="stylesheet" href="assets/css/components.css">
+  <link rel="stylesheet" href="assets/css/pages.css">
+  <link rel="stylesheet" href="assets/css/calendar.css">
+</head>
+<body>
+<div class="app">
+
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+      <div class="logo-mark">F</div>
+      <div class="logo-text">Finpulse <span>CRM</span></div>
+    </div>
+    <nav class="sidebar-nav">
+      <a class="nav-item" href="dashboard.html"><i data-lucide="layout-dashboard" class="icon"></i>Дашборд</a>
+      <a class="nav-item" href="tasks.html"><i data-lucide="list-todo" class="icon"></i>Задачи<span class="nav-count">37</span></a>
+      <a class="nav-item active" href="calendar.html"><i data-lucide="calendar-days" class="icon"></i>Календарь<span class="nav-count">6</span></a>
+      <a class="nav-item" href="clients.html"><i data-lucide="building-2" class="icon"></i>Клиенты</a>
+      <a class="nav-item" href="employees.html"><i data-lucide="users" class="icon"></i>Сотрудники</a>
+      <a class="nav-item" href="analytics.html"><i data-lucide="bar-chart-3" class="icon"></i>Аналитика</a>
+      <a class="nav-item" href="settings.html" data-role-admin><i data-lucide="settings" class="icon"></i>Настройки</a>
+      <div class="nav-section">Интеграции</div>
+      <a class="nav-item" href="telegram.html"><i data-lucide="send" class="icon"></i>Telegram<span class="nav-count">4</span></a>
+    </nav>
+    <div class="sidebar-footer">
+      <a class="sidebar-user" href="employee.html">
+        <span class="avatar av-6">ЮИ</span>
+        <div class="sidebar-user-info">
+          <div class="name">Ибрагимова Юлдуз</div>
+          <div class="role">Главный бухгалтер · супер-админ</div>
+        </div>
+      </a>
+    </div>
+  </aside>
+  <div class="sidebar-overlay"></div>
+
+  <div class="main">
+    <header class="topbar">
+      <button class="topbar-burger" data-sidebar-toggle aria-label="Меню"><i data-lucide="menu" class="icon"></i></button>
+      <div class="topbar-search">
+        <i data-lucide="search" class="icon"></i>
+        <input type="text" placeholder="Поиск по клиентам, задачам, сотрудникам…">
+        <kbd>Ctrl K</kbd>
+      </div>
+      <div class="topbar-actions">
+        <div class="dropdown">
+          <button class="topbar-btn" data-dropdown-toggle data-tooltip="Уведомления" aria-label="Уведомления">
+            <i data-lucide="bell" class="icon"></i><span class="dot"></span>
+          </button>
+          <div class="dropdown-menu menu-wide">
+            <div class="dropdown-header">Уведомления</div>
+            <div class="notif-item">
+              <div class="notif-icon ic-purple"><i data-lucide="receipt" class="icon"></i></div>
+              <div><div class="notif-title">Через 3 дня: НДФЛ и соцвзносы с зарплаты</div><div class="notif-time">календарь · все клиенты</div></div>
+            </div>
+            <div class="notif-item">
+              <div class="notif-icon ic-blue"><i data-lucide="credit-card" class="icon"></i></div>
+              <div><div class="notif-title">Завтра: интернет и связь — ООО «ТехноСфера»</div><div class="notif-time">календарь · платежи</div></div>
+            </div>
+            <div class="dropdown-divider"></div>
+            <button class="dropdown-item" data-toast="info|Уведомления|Все уведомления отмечены прочитанными."><i data-lucide="check-check" class="icon"></i>Отметить всё прочитанным</button>
+          </div>
+        </div>
+        <div class="dropdown">
+          <button class="topbar-profile" data-dropdown-toggle>
+            <span class="avatar avatar-sm av-6">ЮИ</span>
+            <span class="profile-name fw-500">Юлдуз</span>
+            <i data-lucide="chevron-down" class="icon icon-sm text-muted"></i>
+          </button>
+          <div class="dropdown-menu">
+            <a class="dropdown-item" href="employee.html"><i data-lucide="user" class="icon"></i>Мой профиль</a>
+            <a class="dropdown-item" href="settings.html" data-role-admin><i data-lucide="settings" class="icon"></i>Настройки</a>
+            <div class="dropdown-divider"></div>
+            <a class="dropdown-item danger" href="login.html"><i data-lucide="log-out" class="icon"></i>Выйти</a>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <main class="page">
+      <div class="page-header">
+        <div>
+          <h1>Календарь</h1>
+          <p class="subtitle">Сдача отчётов, оплата налогов и обязательные платежи фирм — с напоминаниями от бота</p>
+        </div>
+        <div class="page-header-actions">
+          <button class="btn btn-primary" data-modal-open="modal-reminder"><i data-lucide="alarm-clock-plus" class="icon"></i>Напоминание</button>
+        </div>
+      </div>
+
+      <div class="cal-layout">
+        <!-- Календарь -->
+        <section class="card">
+          <div class="cal-toolbar">
+            <button class="btn btn-secondary btn-icon btn-sm" id="cal-prev" aria-label="Предыдущий месяц"><i data-lucide="chevron-left" class="icon"></i></button>
+            <div class="cal-month-title" id="cal-title">июль 2026</div>
+            <button class="btn btn-secondary btn-icon btn-sm" id="cal-next" aria-label="Следующий месяц"><i data-lucide="chevron-right" class="icon"></i></button>
+            <button class="btn btn-ghost btn-sm" id="cal-today">Сегодня</button>
+            <div class="toolbar-spacer"></div>
+            <div class="chip-row" id="cal-filters" style="margin:0;">
+              <button class="chip active" data-f="all">Все</button>
+              <button class="chip" data-f="tax"><span class="dot" style="background:var(--purple)"></span>Налоги и отчёты</button>
+              <button class="chip" data-f="pay"><span class="dot" style="background:var(--accent)"></span>Платежи фирм</button>
+              <button class="chip" data-f="task"><span class="dot" style="background:var(--warning)"></span>Задачи</button>
+            </div>
+          </div>
+          <div class="cal-grid" id="cal-grid"></div>
+        </section>
+
+        <!-- Правая колонка -->
+        <div class="dash-col">
+          <section class="card">
+            <div class="card-header">
+              <h2>Ближайшие сроки</h2>
+              <span class="badge badge-red">14 дней</span>
+            </div>
+            <div id="cal-upcoming"></div>
+          </section>
+
+          <section class="card">
+            <div class="card-header"><h2>Как уведомит бот</h2><span class="badge badge-gray no-dot">пример</span></div>
+            <div class="bot-preview">
+              <div class="bp-msg">
+                <div class="bp-name">Finpulse · Бухгалтерия (бот)</div>
+                ⏰ <b>Напоминание о сроке</b><br>
+                🧾 Декларация и оплата НДС<br>
+                🏢 Клиенты на ОСНО/НДС<br>
+                📅 Срок: 20 июля (через 3 дня)<br>
+                👩‍💼 Ответственная: Елена Крылова
+                <div class="bp-time">09:00</div>
+              </div>
+            </div>
+            <div class="text-muted text-sm" style="padding:0 16px 16px;">
+              Бот отправит сообщение в группу бухгалтеров за выбранный срок, а при приближении дедлайна создаст задачу в трекере.
+            </div>
+          </section>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<!-- Модалка: новое напоминание -->
+<div class="modal-backdrop" id="modal-reminder">
+  <div class="modal modal-lg" role="dialog" aria-modal="true">
+    <div class="modal-header">
+      <h2>Новое напоминание</h2>
+      <button class="modal-close" data-modal-close aria-label="Закрыть"><i data-lucide="x" class="icon"></i></button>
+    </div>
+    <div class="modal-body">
+      <div class="rem-types">
+        <button type="button" class="rem-type-btn" data-type="tax">
+          <span class="rt-emoji">🧾</span>
+          <span><span class="rt-name">Налог / отчёт</span><br><span class="rt-desc">НДС, УСН, зарплатные, статистика</span></span>
+        </button>
+        <button type="button" class="rem-type-btn active" data-type="pay">
+          <span class="rt-emoji">💳</span>
+          <span><span class="rt-name">Платёж фирмы</span><br><span class="rt-desc">аренда, интернет, лизинг, страховка</span></span>
+        </button>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Название <span class="req">*</span></label>
+        <input type="text" class="input" id="rem-title" placeholder="Например: Аренда офиса">
+        <div class="chip-row" id="rem-suggest"></div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Компания</label>
+          <select class="select" id="rem-company">
+            <option>Все клиенты</option>
+            <option>ООО «ТехноСфера»</option>
+            <option>ИП Соколова А. В.</option>
+            <option>ООО «СтройГарант»</option>
+            <option>АО «ВекторПлюс»</option>
+            <option>ООО «Логистик Групп»</option>
+            <option>ООО «МедФарм»</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Сумма <span class="text-muted">(необязательно)</span></label>
+          <input type="text" class="input" id="rem-amount" placeholder="120 000 ₽">
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Первая дата <span class="req">*</span></label>
+          <input type="date" class="input" id="rem-date">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Время напоминания</label>
+          <input type="time" class="input" id="rem-time" value="09:00">
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Повтор</label>
+        <div class="chip-row" id="rem-repeat" style="margin-top:2px;">
+          <button type="button" class="chip">Однократно</button>
+          <button type="button" class="chip">Ежечасно</button>
+          <button type="button" class="chip">Ежедневно</button>
+          <button type="button" class="chip">Еженедельно</button>
+          <button type="button" class="chip active">Ежемесячно</button>
+          <button type="button" class="chip">Ежеквартально</button>
+          <button type="button" class="chip">Ежегодно</button>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Напомнить</label>
+        <div class="chip-row" id="rem-remind" style="margin-top:2px;">
+          <button type="button" class="chip">в день события</button>
+          <button type="button" class="chip">за 1 день</button>
+          <button type="button" class="chip active">за 3 дня</button>
+          <button type="button" class="chip">за неделю</button>
+        </div>
+      </div>
+
+      <div class="rem-summary">
+        <i data-lucide="bell-ring" class="icon"></i>
+        <span id="rem-summary-text">«Напоминание» · ежемесячно · Telegram-группа за 3 дня</span>
+      </div>
+
+      <div class="rem-toggles">
+        <div class="rem-toggle-row">
+          <span class="rt-label"><i data-lucide="send" class="icon"></i>Уведомить Telegram-группу бухгалтеров</span>
+          <label class="toggle"><input type="checkbox" checked><span class="slider"></span></label>
+        </div>
+        <div class="rem-toggle-row">
+          <span class="rt-label"><i data-lucide="list-plus" class="icon"></i>Создать задачу в трекере при приближении срока</span>
+          <label class="toggle"><input type="checkbox" checked><span class="slider"></span></label>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" data-modal-close>Отмена</button>
+      <button class="btn btn-primary" id="rem-save"><i data-lucide="alarm-clock-plus" class="icon"></i>Создать напоминание</button>
+    </div>
+  </div>
+</div>
+
+<!-- Drawer: события дня -->
+<div class="drawer-backdrop" id="drawer-day">
+  <aside class="drawer" role="dialog" aria-modal="true">
+    <div class="drawer-header">
+      <div>
+        <div class="text-muted text-xs" style="text-transform:uppercase; letter-spacing:0.05em; font-weight:600;">События дня</div>
+        <h2 id="day-title" style="font-size:16px; margin-top:2px;">—</h2>
+      </div>
+      <button class="modal-close" data-drawer-close aria-label="Закрыть"><i data-lucide="x" class="icon"></i></button>
+    </div>
+    <div class="drawer-body" id="day-events"></div>
+    <div class="drawer-footer">
+      <button class="btn btn-primary" style="flex:1;" data-modal-open="modal-reminder" data-drawer-close><i data-lucide="alarm-clock-plus" class="icon"></i>Добавить напоминание</button>
+    </div>
+  </aside>
+</div>
+
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+<script src="assets/js/app.js"></script>
+<script src="assets/js/calendar.js"></script>
+</body>
+</html>

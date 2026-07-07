@@ -23,6 +23,7 @@
     <nav class="sidebar-nav">
       <a class="nav-item" href="dashboard.html"><i data-lucide="layout-dashboard" class="icon"></i>Дашборд</a>
       <a class="nav-item active" href="tasks.html"><i data-lucide="list-todo" class="icon"></i>Задачи<span class="nav-count">37</span></a>
+      <a class="nav-item" href="calendar.html"><i data-lucide="calendar-days" class="icon"></i>Календарь<span class="nav-count">6</span></a>
       <a class="nav-item" href="clients.html"><i data-lucide="building-2" class="icon"></i>Клиенты</a>
       <a class="nav-item" href="employees.html"><i data-lucide="users" class="icon"></i>Сотрудники</a>
       <a class="nav-item" href="analytics.html"><i data-lucide="bar-chart-3" class="icon"></i>Аналитика</a>
@@ -146,6 +147,23 @@
               </tr>
             </thead>
             <tbody>
+              <tr class="clickable" onclick="window.location.href='task.html'">
+                <td><div class="cell-main">Оплатить аренду офиса (120 000 ₽)</div><div class="cell-sub">№ 1255 · из календаря 🔁 ежемесячно</div></td>
+                <td>ООО «ТехноСфера»</td>
+                <td><div class="cell-user"><span class="avatar avatar-sm av-1">ЕК</span>Елена Крылова</div></td>
+                <td><span class="badge badge-purple">Новая</span></td>
+                <td><span class="badge badge-blue">Средний</span></td>
+                <td>15.07.2026</td>
+                <td onclick="event.stopPropagation()">
+                  <div class="dropdown">
+                    <button class="btn btn-ghost btn-icon btn-sm" data-dropdown-toggle aria-label="Действия"><i data-lucide="more-horizontal" class="icon"></i></button>
+                    <div class="dropdown-menu">
+                      <a class="dropdown-item" href="calendar.html"><i data-lucide="calendar-days" class="icon"></i>Открыть в календаре</a>
+                      <button class="dropdown-item" data-toast="success|Статус обновлён|Платёж отмечен выполненным."><i data-lucide="check" class="icon"></i>Выполнена</button>
+                    </div>
+                  </div>
+                </td>
+              </tr>
               <tr class="clickable" onclick="window.location.href='task.html'">
                 <td><div class="cell-main">Подготовить декларацию по НДС за II квартал</div><div class="cell-sub">№ 1247 · из Telegram</div></td>
                 <td>ООО «ТехноСфера»</td>
