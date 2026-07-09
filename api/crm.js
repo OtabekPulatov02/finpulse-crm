@@ -134,6 +134,7 @@ function safeTask(t) {
     createdAt: t.createdAt || null,
     files: Array.isArray(t.files) ? t.files.length : 0,
     dueDate: t.dueDate || null,
+    source: t.source === "crm" ? "crm" : "bot",
   };
 }
 
