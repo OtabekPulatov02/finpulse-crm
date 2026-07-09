@@ -15,6 +15,11 @@
    POST /api/crm {action:"client_create", company, phone, position, ...}
         → создание клиента вручную из CRM, с той же дедупликацией по
           телефону/названию компании, что и при онбординге в боте
+   POST /api/crm {action:"task_create", clientId?, company?, text, assignee?}
+        → создание задачи из CRM: карточка в группу + уведомление клиенту
+          в его телеграме (если clientId привязан к telegramId)
+   POST /api/crm {action:"task_update", num, patch:{text?, assignee?, company?}}
+        → редактирование полей задачи (только staff)
    ============================================================ */
 
 const { Redis } = require("@upstash/redis");
@@ -95,6 +100,10 @@ const MSG = {
     reopened: (n) => `🔄 Task #${n} was reopened.`,
   },
 };
+
+MSG.ru.createdByCrm = (n, text) => `🆕 Бухгалтерия завела для вас задачу №${n}:\n\n${text}\n\nМы уже работаем над ней.`;
+MSG.uz.createdByCrm = (n, text) => `🆕 Buxgalteriya siz uchun №${n} vazifa yaratdi:\n\n${text}\n\nBiz allaqachon ishlayapmiz.`;
+MSG.en.createdByCrm = (n, text) => `🆕 Accounting created task #${n} for you:\n\n${text}\n\nWe're already working on it.`;
 
 const STATUS_LINE = {
   new: "⚪️ Статус: Новая",
@@ -293,6 +302,89 @@ async function listTasks() {
   return rows.filter(Boolean).map(safeTask);
 }
 
+async function createTaskFromCrm({ clientId, company, text, assignee }, actor) {
+  const cleanText = String(text || "").trim();
+  if (!cleanText) return { ok: false, error: "text required" };
+
+  let telegramId = null;
+  let finalCompany = company || null;
+  if (clientId) {
+    const c = await redis.get("client:" + clientId);
+    if (!c) return { ok: false, error: "client not found" };
+    telegramId = c.telegramId || null;
+    finalCompany = c.company;
+  }
+  if (!finalCompany || !String(finalCompany).trim()) {
+    return { ok: false, error: "company required" };
+  }
+
+  const n = await redis.incr("counter:task");
+  const num = 100 + n;
+  const task = {
+    num,
+    client: telegramId,
+    company: finalCompany,
+    text: cleanText,
+    files: [],
+    status: assignee ? "in_progress" : "new",
+    assignee: assignee || null,
+    createdAt: new Date().toISOString(),
+    source: "crm",
+  };
+  await redis.set("task:" + num, task);
+  if (telegramId) {
+    await redis.lpush("utasks:" + telegramId, num);
+    await redis.ltrim("utasks:" + telegramId, 0, 19);
+  }
+  await logEvent("crm", "task_created", { num, company: finalCompany, clientId: clientId || null, by: actor || "CRM" });
+
+  /* Карточка в группе бухгалтеров — тот же формат, что и у карточек из бота */
+  try {
+    const group = await redis.get("group");
+    if (group) {
+      const header =
+        `🆕 Задача №${num}\n🏢 Компания: ${finalCompany}\n——————————\n` +
+        `${cleanText.slice(0, 3600)}\n\n` +
+        `${STATUS_LINE[task.status] || task.status}` +
+        (task.assignee ? `\n👩‍💼 Исполнитель: ${task.assignee}` : "") +
+        `\n✍️ Заведена из CRM: ${actor || "CRM"}`;
+      const kb =
+        task.status === "new"
+          ? { inline_keyboard: [[{ text: "🙋 Взять в работу", callback_data: `take:${num}` }, { text: "✅ Выполнена", callback_data: `done:${num}` }]] }
+          : { inline_keyboard: [[{ text: "✅ Выполнена", callback_data: `done:${num}` }]] };
+      const sent = await tg("sendMessage", { chat_id: Number(group), text: header, reply_markup: kb });
+      if (sent && sent.result && sent.result.message_id) {
+        task.gmsg = sent.result.message_id;
+        await redis.set("task:" + num, task);
+      }
+    }
+  } catch (e) { /* карточка не критична */ }
+
+  /* Уведомляем клиента в его языке, если он привязан к телеграму */
+  try {
+    if (telegramId) {
+      const u = await redis.get("user:" + telegramId);
+      const lang = (u && u.lang) || "ru";
+      await tg("sendMessage", { chat_id: telegramId, text: MSG[lang].createdByCrm(num, cleanText) });
+    }
+  } catch (e) { /* noop */ }
+
+  return { ok: true, task: safeTask(task) };
+}
+
+async function patchTask(num, patch, actor) {
+  const task = await redis.get("task:" + num);
+  if (!task) return { ok: false, error: "task not found" };
+  const allowed = ["text", "assignee", "company"];
+  for (const k of allowed) {
+    if (Object.prototype.hasOwnProperty.call(patch || {}, k)) task[k] = patch[k];
+  }
+  task.updatedAt = new Date().toISOString();
+  await redis.set("task:" + num, task);
+  await logEvent("crm", "task_updated", { num, fields: Object.keys(patch || {}), by: actor || "CRM" });
+  return { ok: true, task: safeTask(task) };
+}
+
 async function updateStatus(num, status, assignee) {
   const task = await redis.get("task:" + num);
   if (!task) return { ok: false, error: "task not found" };
@@ -440,6 +532,16 @@ module.exports = async (req, res) => {
       if (body && body.action === "client_update" && body.id) {
         const actor = (authUser && authUser.name) || "CRM";
         const r = await patchClient(body.id, body.patch || {}, actor);
+        return res.status(200).json(r);
+      }
+      if (body && body.action === "task_create") {
+        const actor = (authUser && authUser.name) || "CRM";
+        const r = await createTaskFromCrm(body, actor);
+        return res.status(200).json(r);
+      }
+      if (body && body.action === "task_update" && body.num) {
+        const actor = (authUser && authUser.name) || "CRM";
+        const r = await patchTask(Number(body.num), body.patch || {}, actor);
         return res.status(200).json(r);
       }
       return res.status(200).json({ ok: false, error: "unknown action" });
