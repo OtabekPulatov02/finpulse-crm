@@ -1,15 +1,23 @@
 /* ============================================================
-   Finpulse CRM — ежедневное напоминание о сроках задач.
+   Finpulse CRM — ежедневное напоминание о сроках задач + повторяющихся
+   событиях календаря (налоги/платежи).
    Вызывается Vercel Cron (см. vercel.json, "/api/cron/reminders").
 
    Что делает:
    1. Берёт все задачи с установленным dueDate (индекс "tasks:withdue"),
       которые ещё не выполнены.
-   2. Просроченные и те, что со сроком сегодня — собирает в один
-      дайджест и отправляет в группу бухгалтеров.
-   3. Клиенту, у которого задача со сроком сегодня и есть telegramId,
-      шлёт личное напоминание на его языке (не чаще одного раза в день
-      на задачу — отмечается task.lastReminderDate).
+      - Просроченные и те, что со сроком сегодня — собирает в один
+        дайджест и отправляет в группу бухгалтеров.
+      - Клиенту, у которого задача со сроком сегодня и есть telegramId,
+        шлёт личное напоминание на его языке (не чаще одного раза в день
+        на задачу — отмечается task.lastReminderDate).
+   2. Берёт все активные события календаря (calendarevent:<id>, индекс
+      "calendarevents") — это отдельная сущность, не связанная с
+      задачами (налоги/платежи с повтором). Для каждого:
+      - если сегодня >= (дата события − remindDays) и ещё не напоминали
+        сегодня — шлёт напоминание в группу;
+      - если дата события уже прошла — переносит на следующий период
+        (repeat: monthly/quarterly/yearly), либо деактивирует (repeat:once).
 
    Защита: если задан env CRON_SECRET, запрос должен содержать
    заголовок "Authorization: Bearer <CRON_SECRET>" — именно так Vercel
@@ -47,11 +55,126 @@ function tashkentDateStr(d) {
   return t.toISOString().slice(0, 10);
 }
 
+/* "YYYY-MM-DD" + n дней (может быть отрицательным) → "YYYY-MM-DD" */
+function addDays(dateStr, n) {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + n);
+  return dt.toISOString().slice(0, 10);
+}
+
+/* Следующая дата того же события после того, как текущая прошла.
+   "once" → null (повтора нет, событие деактивируется). */
+function advanceDate(dateStr, repeat) {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  if (repeat === "monthly") dt.setUTCMonth(dt.getUTCMonth() + 1);
+  else if (repeat === "quarterly") dt.setUTCMonth(dt.getUTCMonth() + 3);
+  else if (repeat === "yearly") dt.setUTCFullYear(dt.getUTCFullYear() + 1);
+  else return null;
+  return dt.toISOString().slice(0, 10);
+}
+
 async function logEvent(source, event, data) {
   try {
     await redis.lpush("logs:" + source, JSON.stringify({ ts: new Date().toISOString(), event, ...data }));
     await redis.ltrim("logs:" + source, 0, 499);
   } catch (e) { /* noop */ }
+}
+
+async function processTaskReminders(todayStr) {
+  const nums = (await redis.smembers("tasks:withdue")) || [];
+  if (!nums.length) return { checked: 0, overdue: 0, dueToday: 0, notified: 0 };
+
+  const keys = nums.map((n) => "task:" + n);
+  const rows = (await redis.mget(...keys)).filter(Boolean);
+
+  const open = rows.filter((t) => t.dueDate && t.status !== "done");
+  const overdue = open.filter((t) => t.dueDate < todayStr);
+  const dueToday = open.filter((t) => t.dueDate === todayStr);
+
+  let notified = 0;
+
+  /* Дайджест в группу */
+  try {
+    const group = await redis.get("group");
+    if (group && (overdue.length || dueToday.length)) {
+      const line = (t) => `№${t.num} · ${t.company} · до ${t.dueDate}${t.assignee ? ` · ${t.assignee}` : ""}`;
+      let text = `⏰ Напоминания на ${todayStr}\n`;
+      if (overdue.length) {
+        text += `\n🔴 Просрочено (${overdue.length}):\n` + overdue.map(line).join("\n");
+      }
+      if (dueToday.length) {
+        text += `\n\n🟡 Срок сегодня (${dueToday.length}):\n` + dueToday.map(line).join("\n");
+      }
+      await tg("sendMessage", { chat_id: Number(group), text });
+    }
+  } catch (e) { /* карточка не критична */ }
+
+  /* Личные напоминания клиентам — только по задачам со сроком сегодня,
+     не чаще раза в день на задачу */
+  for (const t of dueToday) {
+    if (!t.client) continue;
+    if (t.lastReminderDate === todayStr) continue;
+    try {
+      const u = await redis.get("user:" + t.client);
+      const lang = (u && u.lang) || "ru";
+      await tg("sendMessage", { chat_id: t.client, text: MSG[lang](t.num, t.text, t.dueDate) });
+      t.lastReminderDate = todayStr;
+      await redis.set("task:" + t.num, t);
+      notified++;
+    } catch (e) { /* noop */ }
+  }
+
+  return { checked: open.length, overdue: overdue.length, dueToday: dueToday.length, notified };
+}
+
+async function processCalendarEvents(todayStr) {
+  const ids = (await redis.smembers("calendarevents")) || [];
+  if (!ids.length) return { checked: 0, notified: 0, advanced: 0, deactivated: 0 };
+
+  const keys = ids.map((id) => "calendarevent:" + id);
+  const rows = (await redis.mget(...keys)).filter(Boolean).filter((e) => e.active !== false);
+
+  let group = null;
+  try { group = await redis.get("group"); } catch (e) { /* noop */ }
+
+  let notified = 0, advanced = 0, deactivated = 0;
+
+  for (const ev of rows) {
+    const remindFrom = addDays(ev.date, -(ev.remindDays || 0));
+    const shouldNotify = todayStr >= remindFrom && ev.lastNotifiedDate !== todayStr;
+
+    if (shouldNotify && group) {
+      try {
+        const label = ev.type === "tax" ? "Налог/отчёт" : "Платёж";
+        const companyLabel = ev.company || "Все клиенты";
+        const tag = todayStr > ev.date ? " (просрочено)" : todayStr === ev.date ? " (сегодня)" : "";
+        await tg("sendMessage", {
+          chat_id: Number(group),
+          text: `🔔 ${label}: ${ev.title}\n${companyLabel} · срок ${ev.date}${tag}`,
+        });
+        ev.lastNotifiedDate = todayStr;
+        notified++;
+      } catch (e) { /* noop */ }
+    }
+
+    if (todayStr > ev.date) {
+      const next = advanceDate(ev.date, ev.repeat);
+      if (next) {
+        ev.date = next;
+        ev.lastNotifiedDate = null;
+        advanced++;
+      } else {
+        ev.active = false;
+        deactivated++;
+      }
+    }
+
+    try { await redis.set("calendarevent:" + ev.id, ev); } catch (e) { /* noop */ }
+  }
+
+  return { checked: rows.length, notified, advanced, deactivated };
 }
 
 module.exports = async (req, res) => {
@@ -63,59 +186,15 @@ module.exports = async (req, res) => {
   }
 
   try {
-    const nums = (await redis.smembers("tasks:withdue")) || [];
-    if (!nums.length) {
-      return res.status(200).json({ ok: true, checked: 0, overdue: 0, dueToday: 0, notified: 0 });
-    }
-
-    const keys = nums.map((n) => "task:" + n);
-    const rows = (await redis.mget(...keys)).filter(Boolean);
     const todayStr = tashkentDateStr();
+    const [tasks, calendar] = await Promise.all([
+      processTaskReminders(todayStr).catch((e) => ({ error: String(e).slice(0, 200) })),
+      processCalendarEvents(todayStr).catch((e) => ({ error: String(e).slice(0, 200) })),
+    ]);
 
-    const open = rows.filter((t) => t.dueDate && t.status !== "done");
-    const overdue = open.filter((t) => t.dueDate < todayStr);
-    const dueToday = open.filter((t) => t.dueDate === todayStr);
+    await logEvent("cron", "reminders_sent", { tasks, calendar });
 
-    let notified = 0;
-
-    /* Дайджест в группу */
-    try {
-      const group = await redis.get("group");
-      if (group && (overdue.length || dueToday.length)) {
-        const line = (t) => `№${t.num} · ${t.company} · до ${t.dueDate}${t.assignee ? ` · ${t.assignee}` : ""}`;
-        let text = `⏰ Напоминания на ${todayStr}\n`;
-        if (overdue.length) {
-          text += `\n🔴 Просрочено (${overdue.length}):\n` + overdue.map(line).join("\n");
-        }
-        if (dueToday.length) {
-          text += `\n\n🟡 Срок сегодня (${dueToday.length}):\n` + dueToday.map(line).join("\n");
-        }
-        await tg("sendMessage", { chat_id: Number(group), text });
-      }
-    } catch (e) { /* карточка не критична */ }
-
-    /* Личные напоминания клиентам — только по задачам со сроком сегодня,
-       не чаще раза в день на задачу */
-    for (const t of dueToday) {
-      if (!t.client) continue;
-      if (t.lastReminderDate === todayStr) continue;
-      try {
-        const u = await redis.get("user:" + t.client);
-        const lang = (u && u.lang) || "ru";
-        await tg("sendMessage", { chat_id: t.client, text: MSG[lang](t.num, t.text, t.dueDate) });
-        t.lastReminderDate = todayStr;
-        await redis.set("task:" + t.num, t);
-        notified++;
-      } catch (e) { /* noop */ }
-    }
-
-    await logEvent("cron", "reminders_sent", {
-      checked: open.length, overdue: overdue.length, dueToday: dueToday.length, notified,
-    });
-
-    return res.status(200).json({
-      ok: true, checked: open.length, overdue: overdue.length, dueToday: dueToday.length, notified,
-    });
+    return res.status(200).json({ ok: true, tasks, calendar });
   } catch (e) {
     console.error("cron reminders:", e);
     return res.status(200).json({ ok: false, error: String(e).slice(0, 300) });

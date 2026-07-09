@@ -32,6 +32,13 @@
    POST /api/crm {action:"employee_update", id, patch:{name?, role?, active?}}
    POST /api/crm {action:"employee_reset_password", id} → новый пароль (один раз в ответе)
    POST /api/crm {action:"employee_delete", id}
+   GET  /api/crm?r=calendar_events → повторяющиеся события календаря
+        (налоги/платежи), отдельно от дедлайнов задач — см. calendarevent:<id>
+   POST /api/crm {action:"calendar_event_create", type:"tax"|"pay", title,
+        company?, date:"YYYY-MM-DD", repeat?:"once"|"monthly"|"quarterly"|"yearly",
+        remindDays?:0|1|3|7}
+   POST /api/crm {action:"calendar_event_update", id, patch:{...}}
+   POST /api/crm {action:"calendar_event_delete", id} → только admin
    ============================================================ */
 
 const { Redis } = require("@upstash/redis");
@@ -549,6 +556,85 @@ async function listCalendar(companyFilter) {
   return list;
 }
 
+/* --- Повторяющиеся события календаря (налоги/платежи) — отдельное
+   хранилище, не связанное с задачами: calendarevent:<id> + индекс
+   "calendarevents" (SET id-шников). "date" — дата СЛЕДУЮЩЕГО срабатывания;
+   после наступления даты cron/reminders.js либо переносит её на следующий
+   период (repeat != "once"), либо деактивирует событие. ------------- */
+function safeCalendarEvent(e) {
+  if (!e) return null;
+  return {
+    id: e.id,
+    type: e.type,
+    title: e.title,
+    company: e.company || null,
+    date: e.date,
+    repeat: e.repeat || "once",
+    remindDays: typeof e.remindDays === "number" ? e.remindDays : 3,
+    active: e.active !== false,
+    createdAt: e.createdAt || null,
+  };
+}
+
+async function listCalendarEvents() {
+  const ids = (await redis.smembers("calendarevents")) || [];
+  if (!ids.length) return [];
+  const keys = ids.map((id) => "calendarevent:" + id);
+  const rows = (await redis.mget(...keys)).filter(Boolean);
+  rows.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  return rows;
+}
+
+const CE_REPEATS = ["once", "monthly", "quarterly", "yearly"];
+const CE_REMIND_OPTIONS = [0, 1, 3, 7];
+
+async function createCalendarEvent(body, actor) {
+  const { type, title, company, date, repeat, remindDays } = body || {};
+  if (!["tax", "pay"].includes(type)) return { ok: false, error: "type must be tax or pay" };
+  if (!title || !String(title).trim()) return { ok: false, error: "title required" };
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date || ""))) return { ok: false, error: "date must be YYYY-MM-DD" };
+  const rep = CE_REPEATS.includes(repeat) ? repeat : "once";
+  const rd = CE_REMIND_OPTIONS.includes(Number(remindDays)) ? Number(remindDays) : 3;
+  const id = "ce" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const ev = {
+    id, type, title: String(title).trim(),
+    company: company ? String(company).trim() : null,
+    date: String(date), repeat: rep, remindDays: rd,
+    active: true, lastNotifiedDate: null,
+    createdAt: new Date().toISOString(),
+  };
+  await redis.set("calendarevent:" + id, ev);
+  await redis.sadd("calendarevents", id);
+  await logEvent("crm", "calendar_event_created", { id, title: ev.title, by: actor || "CRM" });
+  return { ok: true, event: safeCalendarEvent(ev) };
+}
+
+async function patchCalendarEvent(id, patch, actor) {
+  const existing = await redis.get("calendarevent:" + id);
+  if (!existing) return { ok: false, error: "not found" };
+  const next = { ...existing };
+  const p = patch || {};
+  if (p.title !== undefined && String(p.title).trim()) next.title = String(p.title).trim();
+  if (p.company !== undefined) next.company = p.company ? String(p.company).trim() : null;
+  if (p.date !== undefined && /^\d{4}-\d{2}-\d{2}$/.test(String(p.date))) next.date = String(p.date);
+  if (p.repeat !== undefined && CE_REPEATS.includes(p.repeat)) next.repeat = p.repeat;
+  if (p.remindDays !== undefined && CE_REMIND_OPTIONS.includes(Number(p.remindDays))) next.remindDays = Number(p.remindDays);
+  if (p.active !== undefined) next.active = !!p.active;
+  next.updatedAt = new Date().toISOString();
+  await redis.set("calendarevent:" + id, next);
+  await logEvent("crm", "calendar_event_updated", { id, by: actor || "CRM" });
+  return { ok: true, event: safeCalendarEvent(next) };
+}
+
+async function deleteCalendarEvent(id, actor) {
+  const existing = await redis.get("calendarevent:" + id);
+  if (!existing) return { ok: false, error: "not found" };
+  await redis.del("calendarevent:" + id);
+  await redis.srem("calendarevents", id);
+  await logEvent("crm", "calendar_event_deleted", { id, title: existing.title, by: actor || "CRM" });
+  return { ok: true };
+}
+
 function tashkentDateStr(d) {
   const dt = d || new Date();
   // Ташкент UTC+5, без перехода на летнее время
@@ -701,7 +787,17 @@ module.exports = async (req, res) => {
         const employees = (await listEmployees()).map(safeEmployee);
         return res.status(200).json({ ok: true, employees });
       }
-      return res.status(200).json({ ok: true, service: "Finpulse CRM API", routes: ["ping", "tasks", "logs", "pending", "clients", "client", "calendar", "employees"] });
+      if (q.r === "calendar_events") {
+        if (rolesEnforced && authUser.role === "guest") {
+          return res.status(200).json({ ok: true, events: [], demo: true });
+        }
+        let events = (await listCalendarEvents()).map(safeCalendarEvent);
+        if (rolesEnforced && authUser.role === "client") {
+          events = events.filter((e) => !e.company || normCompany(e.company) === normCompany(authUser.company || ""));
+        }
+        return res.status(200).json({ ok: true, events });
+      }
+      return res.status(200).json({ ok: true, service: "Finpulse CRM API", routes: ["ping", "tasks", "logs", "pending", "clients", "client", "calendar", "calendar_events", "employees"] });
     }
 
     if (req.method === "POST") {
@@ -775,6 +871,23 @@ module.exports = async (req, res) => {
         if (!isAdmin) return res.status(403).json({ ok: false, error: "forbidden" });
         const actor = (authUser && authUser.name) || "CRM";
         const r = await deleteEmployee(body.id, actor);
+        return res.status(200).json(r);
+      }
+      if (body && body.action === "calendar_event_create") {
+        const actor = (authUser && authUser.name) || "CRM";
+        const r = await createCalendarEvent(body, actor);
+        return res.status(200).json(r);
+      }
+      if (body && body.action === "calendar_event_update" && body.id) {
+        const actor = (authUser && authUser.name) || "CRM";
+        const r = await patchCalendarEvent(body.id, body.patch || {}, actor);
+        return res.status(200).json(r);
+      }
+      if (body && body.action === "calendar_event_delete" && body.id) {
+        const isAdmin = !rolesEnforced || (authUser && authUser.role === "admin");
+        if (!isAdmin) return res.status(403).json({ ok: false, error: "forbidden" });
+        const actor = (authUser && authUser.name) || "CRM";
+        const r = await deleteCalendarEvent(body.id, actor);
         return res.status(200).json(r);
       }
       return res.status(200).json({ ok: false, error: "unknown action" });
