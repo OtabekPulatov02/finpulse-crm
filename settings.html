@@ -110,6 +110,7 @@
         <button class="tab-btn" data-tab-target="tab-dicts"><i data-lucide="book-open" class="icon icon-sm"></i>Справочники</button>
         <button class="tab-btn" data-tab-target="tab-rules"><i data-lucide="git-branch" class="icon icon-sm"></i>Правила распределения</button>
         <button class="tab-btn" data-tab-target="tab-notifications"><i data-lucide="bell" class="icon icon-sm"></i>Уведомления</button>
+        <button class="tab-btn" data-tab-target="tab-logs"><i data-lucide="scroll-text" class="icon icon-sm"></i>Логи системы</button>
       </div>
 
       <!-- Пользователи -->
@@ -500,11 +501,107 @@
           </div>
         </section>
       </div>
+
+      <!-- Логи системы -->
+      <div class="tab-panel" id="tab-logs" data-tab-scope="settings">
+        <div class="info-note mb-16">
+          <i data-lucide="shield-check" class="icon"></i>
+          <span>Все события фиксируются автоматически: задачи из Telegram-бота (кто отправил, когда, вложения) и действия внутри CRM. Хранятся последние 500 записей — для разбора спорных ситуаций.</span>
+        </div>
+        <section class="card">
+          <div class="toolbar">
+            <div class="chip-row" id="log-filters" style="margin:0;">
+              <button class="chip active" data-lf="all">Все</button>
+              <button class="chip" data-lf="tg"><span class="dot" style="background:var(--info)"></span>Telegram</button>
+              <button class="chip" data-lf="crm"><span class="dot" style="background:var(--purple)"></span>CRM</button>
+            </div>
+            <div class="toolbar-spacer"></div>
+            <button class="btn btn-secondary btn-sm" data-toast="info|Экспорт|Журнал выгружен в CSV (демо)."><i data-lucide="download" class="icon"></i>Экспорт</button>
+          </div>
+          <div class="table-wrap">
+            <table class="table" id="logs-table">
+              <thead><tr><th>Время</th><th>Источник</th><th>Событие</th><th>Детали</th></tr></thead>
+              <tbody>
+                <tr data-src="tg">
+                  <td class="text-muted">сегодня, 14:02:11</td>
+                  <td><span class="badge badge-cyan no-dot">Telegram</span></td>
+                  <td class="fw-500">Задача создана</td>
+                  <td class="text-secondary">№ 1247 «Требование ИФНС по НДС…» · ООО «ТехноСфера» · Павел Л. @p_litvinov · 📎 1</td>
+                </tr>
+                <tr data-src="tg">
+                  <td class="text-muted">сегодня, 14:02:12</td>
+                  <td><span class="badge badge-cyan no-dot">Telegram</span></td>
+                  <td class="fw-500">Назначен исполнитель</td>
+                  <td class="text-secondary">№ 1247 → Елена Крылова</td>
+                </tr>
+                <tr data-src="crm">
+                  <td class="text-muted">сегодня, 13:45:02</td>
+                  <td><span class="badge badge-purple no-dot">CRM</span></td>
+                  <td class="fw-500">Вход в систему</td>
+                  <td class="text-secondary">Ибрагимова Юлдуз · супер-админ</td>
+                </tr>
+                <tr data-src="crm">
+                  <td class="text-muted">сегодня, 13:20:44</td>
+                  <td><span class="badge badge-purple no-dot">CRM</span></td>
+                  <td class="fw-500">Изменён статус задачи</td>
+                  <td class="text-secondary">№ 1244 «В работе» → «Выполнена» · Дмитрий Орлов</td>
+                </tr>
+                <tr data-src="tg">
+                  <td class="text-muted">сегодня, 12:47:18</td>
+                  <td><span class="badge badge-cyan no-dot">Telegram</span></td>
+                  <td class="fw-500">Новая компания</td>
+                  <td class="text-secondary">MCHJ «Барака Транс» · телефон подтверждён</td>
+                </tr>
+                <tr data-src="tg">
+                  <td class="text-muted">сегодня, 12:30:05</td>
+                  <td><span class="badge badge-cyan no-dot">Telegram</span></td>
+                  <td class="fw-500">Повтор задачи из истории</td>
+                  <td class="text-secondary">№ 1240 → черновик · ООО «МедФарм»</td>
+                </tr>
+                <tr data-src="crm">
+                  <td class="text-muted">сегодня, 11:05:37</td>
+                  <td><span class="badge badge-purple no-dot">CRM</span></td>
+                  <td class="fw-500">Экспорт отчёта</td>
+                  <td class="text-secondary">Аналитика, июль 2026 · Ольга Никитина</td>
+                </tr>
+                <tr data-src="tg">
+                  <td class="text-muted">вчера, 18:12:50</td>
+                  <td><span class="badge badge-cyan no-dot">Telegram</span></td>
+                  <td class="fw-500">Ответ клиенту</td>
+                  <td class="text-secondary">№ 1238 · Елена Крылова → клиент</td>
+                </tr>
+                <tr data-src="crm">
+                  <td class="text-muted">вчера, 17:40:11</td>
+                  <td><span class="badge badge-purple no-dot">CRM</span></td>
+                  <td class="fw-500">Клиент архивирован</td>
+                  <td class="text-secondary">ИП Мамедов Р. Т. · Ибрагимова Юлдуз</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
     </main>
   </div>
 </div>
 
 <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
 <script src="assets/js/app.js"></script>
+<script>
+  document.addEventListener("DOMContentLoaded", function () {
+    var box = document.getElementById("log-filters");
+    if (!box) return;
+    box.querySelectorAll(".chip").forEach(function (c) {
+      c.addEventListener("click", function () {
+        box.querySelectorAll(".chip").forEach(function (x) { x.classList.remove("active"); });
+        c.classList.add("active");
+        var f = c.getAttribute("data-lf");
+        document.querySelectorAll("#logs-table tbody tr").forEach(function (r) {
+          r.style.display = (f === "all" || r.getAttribute("data-src") === f) ? "" : "none";
+        });
+      });
+    });
+  });
+</script>
 </body>
 </html>

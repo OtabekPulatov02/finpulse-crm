@@ -41,7 +41,10 @@ const T = {
       "ℹ️ Как это работает:\n\n1️⃣ Напишите задачу текстом (можно с файлами)\n2️⃣ Нажмите «Отправить задачу»\n3️⃣ Бухгалтер получит её и ответит здесь\n\nКоманды:\n/new — новая задача\n/tasks — мои задачи\n/company — изменить компанию\n/lang — сменить язык\n/help — помощь",
     langSaved: "Язык сохранён 🇷🇺",
     menu: { newTask: "📝 Новая задача", myTasks: "📋 Мои задачи", lang: "🌐 Язык", help: "ℹ️ Помощь" },
-    myTasksTitle: "📋 Ваши последние задачи:",
+    activeTitle: "🔥 Актуальные:",
+    historyTitle: "🗂 История:",
+    reuseHint: "Нажмите 🔁 чтобы повторить задачу из истории.",
+    reuseDraft: (n) => `🔁 Черновик из задачи №${n}. Дополните или отправляйте 👇`,
     noTasks: "У вас пока нет задач. Просто напишите, что нужно сделать 👇",
     askPhone: "И последнее: отправьте номер телефона — по нему мы точно привяжем вас к вашей компании в системе 📱",
     btnShareContact: "📱 Отправить мой номер",
@@ -71,7 +74,10 @@ const T = {
       "ℹ️ Qanday ishlaydi:\n\n1️⃣ Vazifani matn bilan yozing (fayllar bilan ham bo'ladi)\n2️⃣ «Vazifani yuborish» tugmasini bosing\n3️⃣ Buxgalter uni oladi va shu yerda javob beradi\n\nBuyruqlar:\n/new — yangi vazifa\n/tasks — vazifalarim\n/company — kompaniyani o'zgartirish\n/lang — tilni o'zgartirish\n/help — yordam",
     langSaved: "Til saqlandi 🇺🇿",
     menu: { newTask: "📝 Yangi vazifa", myTasks: "📋 Vazifalarim", lang: "🌐 Til", help: "ℹ️ Yordam" },
-    myTasksTitle: "📋 So'nggi vazifalaringiz:",
+    activeTitle: "🔥 Joriy:",
+    historyTitle: "🗂 Tarix:",
+    reuseHint: "Tarixdagi vazifani takrorlash uchun 🔁 bosing.",
+    reuseDraft: (n) => `🔁 №${n} vazifadan qoralama. To'ldiring yoki yuboring 👇`,
     noTasks: "Hozircha vazifalar yo'q. Nima qilish kerakligini yozing 👇",
     askPhone: "Va nihoyat: telefon raqamingizni yuboring — u orqali sizni tizimdagi kompaniyangizga aniq bog'laymiz 📱",
     btnShareContact: "📱 Raqamimni yuborish",
@@ -101,7 +107,10 @@ const T = {
       "ℹ️ How it works:\n\n1️⃣ Write your task as text (files welcome)\n2️⃣ Tap “Submit task”\n3️⃣ An accountant receives it and replies here\n\nCommands:\n/new — new task\n/tasks — my tasks\n/company — change company\n/lang — change language\n/help — help",
     langSaved: "Language saved 🇬🇧",
     menu: { newTask: "📝 New task", myTasks: "📋 My tasks", lang: "🌐 Language", help: "ℹ️ Help" },
-    myTasksTitle: "📋 Your recent tasks:",
+    activeTitle: "🔥 Active:",
+    historyTitle: "🗂 History:",
+    reuseHint: "Tap 🔁 to reuse a task from history.",
+    reuseDraft: (n) => `🔁 Draft from task #${n}. Edit or submit 👇`,
     noTasks: "No tasks yet. Just write what needs to be done 👇",
     askPhone: "One last thing: share your phone number — we use it to link you to your company in our system 📱",
     btnShareContact: "📱 Share my number",
@@ -213,6 +222,7 @@ async function finishOnboarding(ctx, u) {
   const t = T[u.lang];
   if (u.isNewCompany) {
     delete u.isNewCompany;
+    await logEvent("telegram", "new_company", { company: u.company, phone: u.phone || null });
     await redis.lpush("pending_clients", JSON.stringify({
       company: u.company,
       phone: u.phone || null,
@@ -237,39 +247,56 @@ async function finishOnboarding(ctx, u) {
 
 const STATUS_EMOJI = { new: "⚪️", in_progress: "🔵", done: "🟢" };
 
+/* Журнал событий для CRM (logs:telegram) */
+async function logEvent(source, event, data) {
+  try {
+    await redis.lpush("logs:" + source, JSON.stringify({ ts: new Date().toISOString(), event, ...data }));
+    await redis.ltrim("logs:" + source, 0, 499);
+  } catch (e) { console.error("log:", e); }
+}
+
 async function listTasks(ctx, u) {
   const t = T[u.lang];
-  const nums = (await redis.lrange("utasks:" + ctx.from.id, 0, 4)) || [];
+  const nums = (await redis.lrange("utasks:" + ctx.from.id, 0, 19)) || [];
   if (!nums.length) return ctx.reply(t.noTasks, { reply_markup: mainKb(u.lang) });
-  const lines = [t.myTasksTitle];
+
+  const active = [], history = [];
   for (const n of nums) {
     const task = await redis.get(taskKey(Number(n)));
     if (!task) continue;
+    (task.status === "done" ? history : active).push(task);
+  }
+  if (!active.length && !history.length) return ctx.reply(t.noTasks, { reply_markup: mainKb(u.lang) });
+
+  const line = (task) => {
     let text = (task.text || "").split("\n")[0];
-    if (text.length > 48) text = text.slice(0, 48) + "…";
-    lines.push((STATUS_EMOJI[task.status] || "⚪️") + " №" + task.num + " · " + text + (task.assignee ? " · 👩‍💼 " + task.assignee : ""));
-  }
-  return ctx.reply(lines.join("\n"), { reply_markup: mainKb(u.lang) });
-}
+    if (text.length > 44) text = text.slice(0, 44) + "…";
+    return (STATUS_EMOJI[task.status] || "⚪️") + " №" + task.num + " · " + text +
+      (task.assignee ? " · 👩‍💼 " + task.assignee : "");
+  };
 
-function extractFile(msg) {
-  if (msg.photo && msg.photo.length) {
-    return { kind: "photo", file_id: msg.photo[msg.photo.length - 1].file_id };
+  const parts = [];
+  if (active.length) {
+    parts.push(t.activeTitle);
+    active.slice(0, 5).forEach((x) => parts.push(line(x)));
   }
-  if (msg.document) return { kind: "document", file_id: msg.document.file_id };
-  if (msg.video) return { kind: "video", file_id: msg.video.file_id };
-  if (msg.voice) return { kind: "voice", file_id: msg.voice.file_id };
-  if (msg.audio) return { kind: "audio", file_id: msg.audio.file_id };
-  return null;
-}
+  if (history.length) {
+    if (active.length) parts.push("");
+    parts.push(t.historyTitle);
+    history.slice(0, 5).forEach((x) => parts.push(line(x)));
+    parts.push("");
+    parts.push(t.reuseHint);
+  }
 
-async function sendFileTo(chatId, f, caption) {
-  const opts = caption ? { caption } : {};
-  if (f.kind === "photo") return bot.api.sendPhoto(chatId, f.file_id, opts);
-  if (f.kind === "document") return bot.api.sendDocument(chatId, f.file_id, opts);
-  if (f.kind === "video") return bot.api.sendVideo(chatId, f.file_id, opts);
-  if (f.kind === "voice") return bot.api.sendVoice(chatId, f.file_id, opts);
-  if (f.kind === "audio") return bot.api.sendAudio(chatId, f.file_id, opts);
+  if (history.length) {
+    const kb = new InlineKeyboard();
+    history.slice(0, 5).forEach((task, i) => {
+      kb.text("🔁 №" + task.num, "reuse:" + task.num);
+      if (i % 3 === 2) kb.row();
+    });
+    return ctx.reply(parts.join("\n"), { reply_markup: kb });
+  }
+  return ctx.reply(parts.join("\n"), { reply_markup: mainKb(u.lang) });
 }
 
 /* ---------------- Команды: личный чат ---------------- */
@@ -351,6 +378,26 @@ bot.callbackQuery(/^lang:(ru|uz|en)$/, async (ctx) => {
   await setUser(ctx.from.id, u);
   await ctx.answerCallbackQuery(T[lang].langSaved);
   return ctx.reply(T[lang].idleHint, { reply_markup: mainKb(lang) });
+});
+
+/* ---------------- Повтор задачи из истории ---------------- */
+bot.callbackQuery(/^reuse:(\d+)$/, async (ctx) => {
+  const u = await getUser(ctx.from.id);
+  if (!u || !u.lang) return ctx.answerCallbackQuery();
+  const t = T[u.lang];
+  const task = await redis.get(taskKey(Number(ctx.match[1])));
+  if (!task) return ctx.answerCallbackQuery("✖️");
+  u.state = "draft";
+  u.draft = { text: task.text || "", files: task.files || [] };
+  await setUser(ctx.from.id, u);
+  await ctx.answerCallbackQuery("🔁");
+  const preview = (task.text || "").length > 180 ? (task.text || "").slice(0, 180) + "…" : (task.text || "");
+  await logEvent("telegram", "task_reused", { num: task.num, company: task.company });
+  return ctx.reply(
+    t.reuseDraft(task.num) + "\n\n«" + preview + "»" +
+    (u.draft.files.length ? "\n📎 " + u.draft.files.length : ""),
+    { reply_markup: draftKb(t) }
+  );
 });
 
 /* ---------------- Подтверждение компании ---------------- */
@@ -436,6 +483,13 @@ bot.callbackQuery("submit", async (ctx) => {
   }
 
   await redis.set(taskKey(num), task);
+  await logEvent("telegram", "task_created", {
+    num,
+    company: task.company,
+    from: [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(" ") + (ctx.from.username ? " @" + ctx.from.username : ""),
+    files: task.files.length,
+    text: task.text.slice(0, 120),
+  });
   await redis.lpush("utasks:" + ctx.from.id, num);
   await redis.ltrim("utasks:" + ctx.from.id, 0, 9);
   u.state = "idle";
@@ -453,6 +507,7 @@ bot.callbackQuery(/^take:(\d+)$/, async (ctx) => {
   task.status = "in_progress";
   task.assignee = name;
   await redis.set(taskKey(num), task);
+  await logEvent("telegram", "task_assigned", { num, assignee: name });
 
   const header =
     `🆕 Задача №${num}\n` +
@@ -460,7 +515,7 @@ bot.callbackQuery(/^take:(\d+)$/, async (ctx) => {
     `——————————\n` +
     `${task.text}\n` +
     (task.files.length ? `\n📎 Вложений: ${task.files.length}` : "") +
-    `\n\n🔵 Статус: В работе · 👩‍💼 ${name}`;
+    `\n\n🔵 Статус: В работе\n👩‍💼 Исполнитель: ${name}`;
   const kb = new InlineKeyboard().text("✅ Выполнена", `done:${num}`);
   try {
     await ctx.editMessageText(header, { reply_markup: kb });
@@ -477,6 +532,7 @@ bot.callbackQuery(/^done:(\d+)$/, async (ctx) => {
   if (!task) return ctx.answerCallbackQuery("Задача не найдена");
   task.status = "done";
   await redis.set(taskKey(num), task);
+  await logEvent("telegram", "task_done", { num, assignee: task.assignee || null });
 
   const header =
     `🆕 Задача №${num}\n` +
@@ -484,7 +540,7 @@ bot.callbackQuery(/^done:(\d+)$/, async (ctx) => {
     `——————————\n` +
     `${task.text}\n` +
     (task.files.length ? `\n📎 Вложений: ${task.files.length}` : "") +
-    `\n\n🟢 Статус: Выполнена${task.assignee ? ` · 👩‍💼 ${task.assignee}` : ""}`;
+    `\n\n🟢 Статус: Выполнена${task.assignee ? `\n👩‍💼 Исполнитель: ${task.assignee}` : ""}`;
   try {
     await ctx.editMessageText(header);
   } catch (e) {}
