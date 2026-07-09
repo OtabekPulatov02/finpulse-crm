@@ -41,6 +41,29 @@ function checkApiKey(req) {
   const provided = req.headers["x-api-key"];
   return provided === API_KEY;
 }
+
+/* --- Роли (JWT из /api/auth) -----------------------------------------
+   Пока JWT_SECRET не задан в env — работаем как раньше (без ролей,
+   полный доступ), чтобы не сломать текущий дашборд при раскатке.
+   Как только JWT_SECRET настроен — GET/POST требуют валидный токен,
+   и данные скоупятся по роли (client видит только свою компанию,
+   guest получает демо-данные, оба не видят логи/pending и не могут
+   менять статус). ------------------------------------------------------- */
+const jwt = require("jsonwebtoken");
+const JWT_SECRET = process.env.JWT_SECRET || "";
+
+function getAuthUser(req) {
+  const h = req.headers.authorization || "";
+  const m = /^Bearer\s+(.+)$/i.exec(h);
+  if (!m || !JWT_SECRET) return null;
+  try { return jwt.verify(m[1], JWT_SECRET); } catch { return null; }
+}
+
+const DEMO_TASKS = [
+  { num: 9001, company: "Демо ООО «Пример»", text: "Подготовить отчёт по НДС", status: "in_progress", assignee: "Демо-бухгалтер", createdAt: new Date().toISOString(), files: 1 },
+  { num: 9002, company: "Демо ООО «Пример»", text: "Свериться с поставщиком", status: "new", assignee: null, createdAt: new Date().toISOString(), files: 0 },
+  { num: 9003, company: "Демо ООО «Пример»", text: "Начислить зарплату за месяц", status: "done", assignee: "Демо-бухгалтер", createdAt: new Date().toISOString(), files: 2 },
+];
 const tg = (method, payload) =>
   fetch(`https://api.telegram.org/bot${TOKEN}/${method}`, {
     method: "POST",
@@ -160,30 +183,47 @@ module.exports = async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", resolveOrigin(req));
   res.setHeader("Vary", "Origin");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "content-type,x-api-key");
+  res.setHeader("Access-Control-Allow-Headers", "content-type,x-api-key,authorization");
   if (req.method === "OPTIONS") return res.status(204).end();
 
   if (!checkApiKey(req)) {
     return res.status(401).json({ ok: false, error: "unauthorized" });
   }
 
+  const q = req.query || {};
+  const authUser = getAuthUser(req);
+  const rolesEnforced = !!JWT_SECRET; // как только задан секрет — роли обязательны
+  const isStaff = !rolesEnforced || (authUser && (authUser.role === "admin" || authUser.role === "accountant"));
+
+  if (rolesEnforced && !authUser && q.r !== "ping") {
+    return res.status(401).json({ ok: false, error: "auth required" });
+  }
+
   try {
     if (req.method === "GET") {
-      const q = req.query || {};
       if (q.r === "ping") {
         const [n, group] = await Promise.all([redis.get("counter:task"), redis.get("group")]);
         return res.status(200).json({ ok: true, tasks: Number(n || 0), group: !!group, bot: "@finpulse_crm_bot" });
       }
       if (q.r === "tasks") {
-        return res.status(200).json({ ok: true, tasks: await listTasks() });
+        if (rolesEnforced && authUser.role === "guest") {
+          return res.status(200).json({ ok: true, tasks: DEMO_TASKS, demo: true });
+        }
+        let tasks = await listTasks();
+        if (rolesEnforced && authUser.role === "client") {
+          tasks = tasks.filter((t) => t.company === authUser.company);
+        }
+        return res.status(200).json({ ok: true, tasks });
       }
       if (q.r === "logs") {
+        if (!isStaff) return res.status(403).json({ ok: false, error: "forbidden" });
         const src = q.src === "crm" ? "crm" : "telegram";
         const rows = (await redis.lrange("logs:" + src, 0, 199)) || [];
         const logs = rows.map((r) => { try { return typeof r === "string" ? JSON.parse(r) : r; } catch { return null; } }).filter(Boolean);
         return res.status(200).json({ ok: true, src, logs });
       }
       if (q.r === "pending") {
+        if (!isStaff) return res.status(403).json({ ok: false, error: "forbidden" });
         const rows = (await redis.lrange("pending_clients", 0, 49)) || [];
         const pending = rows.map((r) => { try { const o = typeof r === "string" ? JSON.parse(r) : r; return { company: o.company, phone: maskPhone(o.phone), at: o.at || o.ts || null }; } catch { return null; } }).filter(Boolean);
         return res.status(200).json({ ok: true, pending });
@@ -192,6 +232,7 @@ module.exports = async (req, res) => {
     }
 
     if (req.method === "POST") {
+      if (!isStaff) return res.status(403).json({ ok: false, error: "forbidden" });
       let body = req.body;
       if (typeof body === "string") { try { body = JSON.parse(body); } catch { body = {}; } }
       if (body && body.action === "status" && body.num && body.status) {

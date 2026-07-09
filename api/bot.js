@@ -12,11 +12,35 @@
 
 const { Bot, webhookCallback, InlineKeyboard } = require("grammy");
 const { Redis } = require("@upstash/redis");
+const bcrypt = require("bcryptjs");
+const crypto = require("crypto");
 
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL,
   token: process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN,
 });
+
+/* ---------------- Доступ клиента в CRM (логин = телефон) ---------------- */
+function normPhone(p) {
+  return String(p || "").replace(/[^\d+]/g, "");
+}
+function genPassword() {
+  // 8 читаемых символов без похожих друг на друга (0/O, 1/l/I)
+  const alphabet = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
+  let out = "";
+  const bytes = crypto.randomBytes(8);
+  for (let i = 0; i < 8; i++) out += alphabet[bytes[i] % alphabet.length];
+  return out;
+}
+async function ensureClientCredentials(ctx, u) {
+  if (!u.phone || u.pwdHash) return null; // уже есть пароль, либо телефон не указан
+  const phone = normPhone(u.phone);
+  const password = genPassword();
+  u.pwdHash = bcrypt.hashSync(password, 10);
+  u.authPhone = phone;
+  await redis.set("authphone:" + phone, ctx.from.id);
+  return password;
+}
 
 /* ---------------- Тексты интерфейса ---------------- */
 const T = {
@@ -52,6 +76,8 @@ const T = {
     companyConfirm: (m) => `Похоже, вы из этой компании:\n\n🏢 ${m}\n\nВерно?`,
     btnYes: "✅ Да, верно",
     btnNo: "✍️ Нет, другая",
+    crmCreds: (login, pass) =>
+      `🔐 Доступ в личный кабинет CRM:\nСайт: ${process.env.CRM_APP_URL || "https://finpulse-crm-app.vercel.app"}\nЛогин (телефон): ${login}\nПароль: ${pass}\n\nПароль выдаётся один раз — сохраните его. Сменить можно, написав в чат «/password».`,
   },
   uz: {
     askCompany: "Ajoyib! 🇺🇿\nKompaniyangiz nomi qanday? Bitta xabar bilan yozing.",
@@ -85,6 +111,8 @@ const T = {
     companyConfirm: (m) => `Siz shu kompaniyadansiz shekilli:\n\n🏢 ${m}\n\nTo'g'rimi?`,
     btnYes: "✅ Ha, to'g'ri",
     btnNo: "✍️ Yo'q, boshqa",
+    crmCreds: (login, pass) =>
+      `🔐 CRM shaxsiy kabinetiga kirish:\nSayt: ${process.env.CRM_APP_URL || "https://finpulse-crm-app.vercel.app"}\nLogin (telefon): ${login}\nParol: ${pass}\n\nParol faqat bir marta beriladi — saqlab qo'ying. O'zgartirish uchun chatga «/password» yozing.`,
   },
   en: {
     askCompany: "Great! 🇬🇧\nWhat is your company name? Send it in one message.",
@@ -118,6 +146,8 @@ const T = {
     companyConfirm: (m) => `Looks like you are from:\n\n🏢 ${m}\n\nIs that right?`,
     btnYes: "✅ Yes, correct",
     btnNo: "✍️ No, different",
+    crmCreds: (login, pass) =>
+      `🔐 CRM portal access:\nSite: ${process.env.CRM_APP_URL || "https://finpulse-crm-app.vercel.app"}\nLogin (phone): ${login}\nPassword: ${pass}\n\nThe password is issued once — please save it. To change it, write "/password" in this chat.`,
   },
 };
 
@@ -244,8 +274,13 @@ async function notifyNewCompany(u) {
 async function finishOnboarding(ctx, u) {
   const t = T[u.lang];
   await notifyNewCompany(u);
+  const newPassword = await ensureClientCredentials(ctx, u);
   await setUser(ctx.from.id, u);
-  return ctx.reply(t.ready(u.company), { reply_markup: mainKb(u.lang) });
+  await ctx.reply(t.ready(u.company), { reply_markup: mainKb(u.lang) });
+  if (newPassword) {
+    await ctx.reply(t.crmCreds(u.authPhone, newPassword));
+  }
+  return;
 }
 
 const STATUS_EMOJI = { new: "⚪️", in_progress: "🔵", done: "🟢" };
@@ -381,6 +416,20 @@ bot.command("company", async (ctx) => {
   u.state = "company";
   await setUser(ctx.from.id, u);
   return ctx.reply(T[u.lang].askCompany);
+});
+
+bot.command("password", async (ctx) => {
+  if (!isPrivate(ctx)) return;
+  const u = await getUser(ctx.from.id);
+  if (!u || !u.lang) return ctx.reply(HELLO, { reply_markup: LANG_KB });
+  if (!u.phone) return ctx.reply(T[u.lang].askPhone, { reply_markup: phoneKb(T[u.lang]) });
+  const phone = normPhone(u.phone);
+  const password = genPassword();
+  u.pwdHash = bcrypt.hashSync(password, 10);
+  u.authPhone = phone;
+  await redis.set("authphone:" + phone, ctx.from.id);
+  await setUser(ctx.from.id, u);
+  return ctx.reply(T[u.lang].crmCreds(phone, password));
 });
 
 /* ---------------- Команды: группа ---------------- */
