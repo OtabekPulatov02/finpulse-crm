@@ -18,6 +18,29 @@ const redis = new Redis({
 });
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+
+/* --- Доступ ---------------------------------------------------------
+   Временная защита (до полноценных JWT-сессий из ролевой системы):
+   - CRM_API_KEY: общий секрет, который CRM-фронт шлёт в заголовке x-api-key
+   - CRM_ALLOWED_ORIGINS: список разрешённых Origin через запятую
+   ---------------------------------------------------------------------- */
+const API_KEY = process.env.CRM_API_KEY || "";
+const ALLOWED_ORIGINS = (process.env.CRM_ALLOWED_ORIGINS || "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+function resolveOrigin(req) {
+  const origin = req.headers.origin || "";
+  if (!ALLOWED_ORIGINS.length) return origin || "*"; // список ещё не настроен — не ломаем текущую работу
+  return ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0];
+}
+
+function checkApiKey(req) {
+  if (!API_KEY) return true; // ключ ещё не задан в env — пропускаем (переходный период)
+  const provided = req.headers["x-api-key"];
+  return provided === API_KEY;
+}
 const tg = (method, payload) =>
   fetch(`https://api.telegram.org/bot${TOKEN}/${method}`, {
     method: "POST",
@@ -134,10 +157,15 @@ async function updateStatus(num, status, assignee) {
 }
 
 module.exports = async (req, res) => {
-  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Origin", resolveOrigin(req));
+  res.setHeader("Vary", "Origin");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "content-type");
+  res.setHeader("Access-Control-Allow-Headers", "content-type,x-api-key");
   if (req.method === "OPTIONS") return res.status(204).end();
+
+  if (!checkApiKey(req)) {
+    return res.status(401).json({ ok: false, error: "unauthorized" });
+  }
 
   try {
     if (req.method === "GET") {
