@@ -64,8 +64,11 @@ async function collectKeys(categoryNames) {
     }
     for (const k of cat.exact) {
       if (PROTECTED_KEYS.has(k)) continue;
-      const exists = await redis.get(k);
-      if (exists !== null && exists !== undefined) found.set(k, name);
+      /* EXISTS работает для любого типа значения (string/set/list/hash),
+         в отличие от GET, который падает с WRONGTYPE на не-строковых ключах
+         (например "employees"/"clients" — это Redis SET, "pending_clients" — LIST). */
+      const exists = await redis.exists(k);
+      if (exists) found.set(k, name);
     }
   }
   return found;
