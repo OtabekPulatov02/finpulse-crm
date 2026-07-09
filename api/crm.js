@@ -20,6 +20,8 @@
           в его телеграме (если clientId привязан к telegramId)
    POST /api/crm {action:"task_update", num, patch:{text?, assignee?, company?, dueDate?}}
         → редактирование полей задачи, включая срок (dueDate, "YYYY-MM-DD")
+   POST /api/crm {action:"client_delete", id} → удаление клиента (только admin)
+   POST /api/crm {action:"task_delete", num} → удаление задачи (только admin)
    GET  /api/crm?r=calendar → задачи со сроком (dueDate), не выполненные,
         с флагами overdue/dueToday — источник для напоминаний Vercel Cron
         (см. api/cron/reminders.js) и календаря на фронте
@@ -289,6 +291,21 @@ async function patchClient(id, patch, actor) {
   return { ok: true, client: fullClient(next) };
 }
 
+async function deleteClient(id, actor) {
+  const existing = await redis.get("client:" + id);
+  if (!existing) return { ok: false, error: "client not found" };
+  const normC = normCompany(existing.company || "");
+  const normP = existing.phone ? normPhone(existing.phone) : null;
+  await redis.del("client:" + id);
+  await redis.srem("clients", id);
+  try {
+    if (normC && (await redis.get("clientcompany:" + normC)) === id) await redis.del("clientcompany:" + normC);
+    if (normP && (await redis.get("clientphone:" + normP)) === id) await redis.del("clientphone:" + normP);
+  } catch (e) { /* индексы не критичны при отсутствии */ }
+  await logEvent("crm", "client_deleted", { id, company: existing.company, by: actor || "CRM" });
+  return { ok: true, id };
+}
+
 const DEMO_CLIENT = {
   id: "demo1", company: "Демо ООО «Пример»", position: "Главный бухгалтер",
   phone: "+998 *** ** 00", status: "active", assignedTo: "Демо-бухгалтер",
@@ -433,6 +450,15 @@ function tashkentDateStr(d) {
   // Ташкент UTC+5, без перехода на летнее время
   const t = new Date(dt.getTime() + 5 * 3600 * 1000);
   return t.toISOString().slice(0, 10);
+}
+
+async function deleteTask(num, actor) {
+  const task = await redis.get("task:" + num);
+  if (!task) return { ok: false, error: "task not found" };
+  await redis.del("task:" + num);
+  await redis.srem("tasks:withdue", num);
+  await logEvent("crm", "task_deleted", { num, company: task.company, by: actor || "CRM" });
+  return { ok: true, num };
 }
 
 async function updateStatus(num, status, assignee) {
@@ -600,6 +626,20 @@ module.exports = async (req, res) => {
       if (body && body.action === "task_update" && body.num) {
         const actor = (authUser && authUser.name) || "CRM";
         const r = await patchTask(Number(body.num), body.patch || {}, actor);
+        return res.status(200).json(r);
+      }
+      if (body && body.action === "client_delete" && body.id) {
+        const isAdmin = !rolesEnforced || (authUser && authUser.role === "admin");
+        if (!isAdmin) return res.status(403).json({ ok: false, error: "forbidden" });
+        const actor = (authUser && authUser.name) || "CRM";
+        const r = await deleteClient(body.id, actor);
+        return res.status(200).json(r);
+      }
+      if (body && body.action === "task_delete" && body.num) {
+        const isAdmin = !rolesEnforced || (authUser && authUser.role === "admin");
+        if (!isAdmin) return res.status(403).json({ ok: false, error: "forbidden" });
+        const actor = (authUser && authUser.name) || "CRM";
+        const r = await deleteTask(Number(body.num), actor);
         return res.status(200).json(r);
       }
       return res.status(200).json({ ok: false, error: "unknown action" });
