@@ -258,6 +258,18 @@ async function logEvent(source, event, data) {
   } catch (e) { console.error("log:", e); }
 }
 
+/* Отправка длинного текста частями (в пределах лимита Telegram) */
+async function sendLong(ctx, text, opts) {
+  const LIMIT = 4000;
+  if (text.length <= LIMIT) return ctx.reply(text, opts);
+  let last;
+  for (let i = 0; i < text.length; i += LIMIT) {
+    const isLast = i + LIMIT >= text.length;
+    last = await ctx.reply(text.slice(i, i + LIMIT), isLast ? opts : undefined);
+  }
+  return last;
+}
+
 async function listTasks(ctx, u) {
   const t = T[u.lang];
   const nums = (await redis.lrange("utasks:" + ctx.from.id, 0, 19)) || [];
@@ -271,35 +283,33 @@ async function listTasks(ctx, u) {
   }
   if (!active.length && !history.length) return ctx.reply(t.noTasks, { reply_markup: mainKb(u.lang) });
 
-  const line = (task) => {
-    let text = (task.text || "").split("\n")[0];
-    if (text.length > 44) text = text.slice(0, 44) + "…";
-    return (STATUS_EMOJI[task.status] || "⚪️") + " №" + task.num + " · " + text +
-      (task.assignee ? " · 👩‍💼 " + task.assignee : "");
-  };
+  const block = (task) =>
+    (STATUS_EMOJI[task.status] || "⚪️") + " №" + task.num +
+    (task.assignee ? " · 👩‍💼 " + task.assignee : "") +
+    "\n" + (task.text || "");
 
   const parts = [];
   if (active.length) {
     parts.push(t.activeTitle);
-    active.slice(0, 5).forEach((x) => parts.push(line(x)));
+    active.slice(0, 5).forEach((x) => parts.push(block(x)));
   }
   if (history.length) {
-    if (active.length) parts.push("");
+    if (active.length) parts.push("· · ·");
     parts.push(t.historyTitle);
-    history.slice(0, 5).forEach((x) => parts.push(line(x)));
-    parts.push("");
+    history.slice(0, 5).forEach((x) => parts.push(block(x)));
     parts.push(t.reuseHint);
   }
 
+  let opts = { reply_markup: mainKb(u.lang) };
   if (history.length) {
     const kb = new InlineKeyboard();
     history.slice(0, 5).forEach((task, i) => {
       kb.text("🔁 №" + task.num, "reuse:" + task.num);
       if (i % 3 === 2) kb.row();
     });
-    return ctx.reply(parts.join("\n"), { reply_markup: kb });
+    opts = { reply_markup: kb };
   }
-  return ctx.reply(parts.join("\n"), { reply_markup: mainKb(u.lang) });
+  return sendLong(ctx, parts.join("\n\n"), opts);
 }
 
 function extractFile(msg) {
@@ -414,10 +424,10 @@ bot.callbackQuery(/^reuse:(\d+)$/, async (ctx) => {
   u.draft = { text: task.text || "", files: task.files || [] };
   await setUser(ctx.from.id, u);
   await ctx.answerCallbackQuery("🔁");
-  const preview = (task.text || "").length > 180 ? (task.text || "").slice(0, 180) + "…" : (task.text || "");
   await logEvent("telegram", "task_reused", { num: task.num, company: task.company });
-  return ctx.reply(
-    t.reuseDraft(task.num) + "\n\n«" + preview + "»" +
+  return sendLong(
+    ctx,
+    t.reuseDraft(task.num) + "\n\n«" + (task.text || "") + "»" +
     (u.draft.files.length ? "\n📎 " + u.draft.files.length : ""),
     { reply_markup: draftKb(t) }
   );
