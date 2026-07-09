@@ -218,29 +218,32 @@ async function fuzzyCompany(name) {
   return best ? { name: best, exact: false } : null;
 }
 
+async function notifyNewCompany(u) {
+  if (!u.isNewCompany) return;
+  delete u.isNewCompany;
+  await logEvent("telegram", "new_company", { company: u.company, phone: u.phone || null });
+  await redis.lpush("pending_clients", JSON.stringify({
+    company: u.company,
+    phone: u.phone || null,
+    at: new Date().toISOString(),
+  }));
+  const group = await redis.get("group");
+  if (group) {
+    try {
+      await bot.api.sendMessage(
+        group,
+        "🆕 Новый клиент зарегистрировался в боте\n" +
+        "🏢 " + u.company + "\n\n" +
+        "Компании нет в базе CRM — создайте карточку, заполните данные и назначьте ответственного. " +
+        "Телефон клиента — в списке «Ожидают активации»."
+      );
+    } catch (e) { console.error("notify new company:", e); }
+  }
+}
+
 async function finishOnboarding(ctx, u) {
   const t = T[u.lang];
-  if (u.isNewCompany) {
-    delete u.isNewCompany;
-    await logEvent("telegram", "new_company", { company: u.company, phone: u.phone || null });
-    await redis.lpush("pending_clients", JSON.stringify({
-      company: u.company,
-      phone: u.phone || null,
-      at: new Date().toISOString(),
-    }));
-    const group = await redis.get("group");
-    if (group) {
-      try {
-        await bot.api.sendMessage(
-          group,
-          "🆕 Новый клиент зарегистрировался в боте\n" +
-          "🏢 " + u.company + "\n\n" +
-          "Компании нет в базе CRM — создайте карточку, заполните данные и назначьте ответственного. " +
-          "Телефон клиента — в списке «Ожидают активации»."
-        );
-      } catch (e) { console.error("notify new company:", e); }
-    }
-  }
+  await notifyNewCompany(u);
   await setUser(ctx.from.id, u);
   return ctx.reply(t.ready(u.company), { reply_markup: mainKb(u.lang) });
 }
@@ -447,12 +450,27 @@ bot.callbackQuery("submit", async (ctx) => {
     num,
     client: ctx.from.id,
     company: u.company,
-    text: u.draft.text.slice(0, 3500),
+    text: u.draft.text,
     files: u.draft.files || [],
     status: "new",
     assignee: null,
     createdAt: new Date().toISOString(),
   };
+
+  /* Сохраняем задачу сразу — она не потеряется, даже если отправка в группу упадёт */
+  await redis.set(taskKey(num), task);
+  await redis.lpush("utasks:" + ctx.from.id, num);
+  await redis.ltrim("utasks:" + ctx.from.id, 0, 19);
+  await logEvent("telegram", "task_created", {
+    num,
+    company: task.company,
+    from: [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(" ") + (ctx.from.username ? " @" + ctx.from.username : ""),
+    files: task.files.length,
+    text: task.text.slice(0, 120),
+  });
+  u.state = "idle";
+  u.draft = null;
+  await setUser(ctx.from.id, u);
 
   /* Подтверждение клиенту */
   await ctx.answerCallbackQuery("✅");
@@ -461,40 +479,44 @@ bot.callbackQuery("submit", async (ctx) => {
 
   /* Карточка в группу бухгалтеров (без личных данных клиента) */
   const group = await redis.get("group");
-  if (group) {
-    const header =
-      `🆕 Задача №${num}\n` +
-      `🏢 Компания: ${task.company}\n` +
-      `——————————\n` +
-      `${task.text}\n` +
+  if (!group) return;
+  try {
+    const base = `🆕 Задача №${num}\n🏢 Компания: ${task.company}\n——————————\n`;
+    const tail =
       (task.files.length ? `\n📎 Вложений: ${task.files.length}` : "") +
       `\n\n⚪️ Статус: Новая`;
+    const room = 3900 - base.length - tail.length;
+    let body = task.text;
+    let rest = "";
+    if (body.length > room) {
+      rest = body.slice(room);
+      body = body.slice(0, room) + "… (продолжение ⬇️)";
+    }
     const kb = new InlineKeyboard()
       .text("🙋 Взять в работу", `take:${num}`)
       .text("✅ Выполнена", `done:${num}`);
-    const gm = await bot.api.sendMessage(group, header, { reply_markup: kb });
+    const gm = await bot.api.sendMessage(group, base + body + tail, { reply_markup: kb });
     task.gmsg = gm.message_id;
+    await redis.set(taskKey(num), task);
     await redis.set(groupRouteKey(gm.message_id), num);
+
+    while (rest.length) {
+      const chunk = rest.slice(0, 3900);
+      rest = rest.slice(3900);
+      const cm = await bot.api.sendMessage(group, "…" + chunk + (rest.length ? "…" : ""), {
+        reply_to_message_id: gm.message_id,
+      });
+      await redis.set(groupRouteKey(cm.message_id), num);
+    }
 
     for (const f of task.files) {
       const fm = await sendFileTo(group, f, `📎 к задаче №${num}`);
       if (fm) await redis.set(groupRouteKey(fm.message_id), num);
     }
+  } catch (e) {
+    console.error("group send:", e);
+    await logEvent("telegram", "group_send_failed", { num, error: String(e).slice(0, 200) });
   }
-
-  await redis.set(taskKey(num), task);
-  await logEvent("telegram", "task_created", {
-    num,
-    company: task.company,
-    from: [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(" ") + (ctx.from.username ? " @" + ctx.from.username : ""),
-    files: task.files.length,
-    text: task.text.slice(0, 120),
-  });
-  await redis.lpush("utasks:" + ctx.from.id, num);
-  await redis.ltrim("utasks:" + ctx.from.id, 0, 9);
-  u.state = "idle";
-  u.draft = null;
-  await setUser(ctx.from.id, u);
 });
 
 /* ---------------- Кнопки в группе ---------------- */
@@ -626,6 +648,7 @@ bot.on("message", async (ctx) => {
   /* Онбординг: телефон для привязки к CRM */
   if (u.state === "phone") {
     let phone = null;
+    let isPhoneStep = true;
     if (msg.contact && msg.contact.phone_number) {
       phone = msg.contact.phone_number;
     } else {
@@ -633,12 +656,18 @@ bot.on("message", async (ctx) => {
       const isSkip = Object.keys(T).some((l) => txt === T[l].btnSkip);
       if (!isSkip) {
         if (/^\+?[\d\s\-()]{7,18}$/.test(txt)) phone = txt.replace(/[\s\-()]/g, "");
-        else return ctx.reply(t.askPhone, { reply_markup: phoneKb(t) });
+        else isPhoneStep = false; // это не телефон — клиент уже пишет задачу, не блокируем
       }
     }
-    if (phone) u.phone = phone;
+    if (isPhoneStep) {
+      if (phone) u.phone = phone;
+      u.state = "idle";
+      return finishOnboarding(ctx, u);
+    }
     u.state = "idle";
-    return finishOnboarding(ctx, u);
+    await notifyNewCompany(u);
+    await setUser(ctx.from.id, u);
+    // продолжаем обработку этого же сообщения ниже (меню/черновик)
   }
 
   /* Кнопки главного меню */
