@@ -302,6 +302,26 @@ async function listTasks(ctx, u) {
   return ctx.reply(parts.join("\n"), { reply_markup: mainKb(u.lang) });
 }
 
+function extractFile(msg) {
+  if (msg.photo && msg.photo.length) {
+    return { kind: "photo", file_id: msg.photo[msg.photo.length - 1].file_id };
+  }
+  if (msg.document) return { kind: "document", file_id: msg.document.file_id };
+  if (msg.video) return { kind: "video", file_id: msg.video.file_id };
+  if (msg.voice) return { kind: "voice", file_id: msg.voice.file_id };
+  if (msg.audio) return { kind: "audio", file_id: msg.audio.file_id };
+  return null;
+}
+
+async function sendFileTo(chatId, f, caption) {
+  const opts = caption ? { caption } : {};
+  if (f.kind === "photo") return bot.api.sendPhoto(chatId, f.file_id, opts);
+  if (f.kind === "document") return bot.api.sendDocument(chatId, f.file_id, opts);
+  if (f.kind === "video") return bot.api.sendVideo(chatId, f.file_id, opts);
+  if (f.kind === "voice") return bot.api.sendVoice(chatId, f.file_id, opts);
+  if (f.kind === "audio") return bot.api.sendAudio(chatId, f.file_id, opts);
+}
+
 /* ---------------- Команды: личный чат ---------------- */
 bot.command("start", async (ctx) => {
   if (!isPrivate(ctx)) return;
