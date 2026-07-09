@@ -25,9 +25,18 @@
    GET  /api/crm?r=calendar → задачи со сроком (dueDate), не выполненные,
         с флагами overdue/dueToday — источник для напоминаний Vercel Cron
         (см. api/cron/reminders.js) и календаря на фронте
+   GET  /api/crm?r=employees → список сотрудников (только admin)
+   POST /api/crm {action:"employee_create", name, phone, role}
+        → создание сотрудника: логин — телефон, пароль генерируется и
+          возвращается один раз в ответе (только admin)
+   POST /api/crm {action:"employee_update", id, patch:{name?, role?, active?}}
+   POST /api/crm {action:"employee_reset_password", id} → новый пароль (один раз в ответе)
+   POST /api/crm {action:"employee_delete", id}
    ============================================================ */
 
 const { Redis } = require("@upstash/redis");
+const bcrypt = require("bcryptjs");
+const crypto = require("crypto");
 
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL,
@@ -135,6 +144,7 @@ function safeTask(t) {
     files: Array.isArray(t.files) ? t.files.length : 0,
     dueDate: t.dueDate || null,
     source: t.source === "crm" ? "crm" : "bot",
+    doneAt: t.doneAt || null,
   };
 }
 
@@ -307,6 +317,102 @@ async function deleteClient(id, actor) {
   return { ok: true, id };
 }
 
+function genPassword() {
+  // 8 читаемых символов без похожих друг на друга (0/O, 1/l/I) — та же схема, что у клиентов в боте
+  const alphabet = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
+  let out = "";
+  const bytes = crypto.randomBytes(8);
+  for (let i = 0; i < 8; i++) out += alphabet[bytes[i] % alphabet.length];
+  return out;
+}
+
+function safeEmployee(e) {
+  if (!e) return null;
+  return {
+    id: e.id,
+    name: e.name,
+    phone: e.phone || null,
+    role: e.role || "accountant",
+    active: e.active !== false,
+    createdAt: e.createdAt || null,
+  };
+}
+
+async function listEmployees() {
+  const ids = (await redis.smembers("employees")) || [];
+  if (!ids.length) return [];
+  const rows = (await redis.mget(...ids.map((id) => "employee:" + id))).filter(Boolean);
+  return rows.sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""));
+}
+
+async function createEmployee({ name, phone, role }, actor) {
+  const cleanName = String(name || "").trim();
+  if (!cleanName) return { ok: false, error: "name required" };
+  const normP = normPhone(phone);
+  if (!normP) return { ok: false, error: "phone required" };
+
+  const existingId = await redis.get("staffphone:" + normP);
+  if (existingId) return { ok: false, error: "phone already used by another employee" };
+  if (await redis.get("authphone:" + normP)) {
+    return { ok: false, error: "phone already used by a client" };
+  }
+
+  const password = genPassword();
+  const id = "e" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const emp = {
+    id,
+    name: cleanName,
+    phone: normP,
+    role: role === "admin" ? "admin" : "accountant",
+    active: true,
+    createdAt: new Date().toISOString(),
+    pwdHash: bcrypt.hashSync(password, 10),
+  };
+  await redis.set("employee:" + id, emp);
+  await redis.set("staffphone:" + normP, id);
+  await redis.sadd("employees", id);
+  await logEvent("crm", "employee_created", { id, name: cleanName, role: emp.role, by: actor || "CRM" });
+  return { ok: true, employee: safeEmployee(emp), password };
+}
+
+async function patchEmployee(id, patch, actor) {
+  const existing = await redis.get("employee:" + id);
+  if (!existing) return { ok: false, error: "employee not found" };
+  const next = { ...existing };
+  if (Object.prototype.hasOwnProperty.call(patch || {}, "name") && patch.name) next.name = String(patch.name).trim();
+  if (Object.prototype.hasOwnProperty.call(patch || {}, "role") && (patch.role === "admin" || patch.role === "accountant")) next.role = patch.role;
+  if (Object.prototype.hasOwnProperty.call(patch || {}, "active")) next.active = !!patch.active;
+  next.updatedAt = new Date().toISOString();
+  await redis.set("employee:" + id, next);
+  await logEvent("crm", "employee_updated", { id, fields: Object.keys(patch || {}), by: actor || "CRM" });
+  return { ok: true, employee: safeEmployee(next) };
+}
+
+async function resetEmployeePassword(id, actor) {
+  const existing = await redis.get("employee:" + id);
+  if (!existing) return { ok: false, error: "employee not found" };
+  const password = genPassword();
+  existing.pwdHash = bcrypt.hashSync(password, 10);
+  existing.updatedAt = new Date().toISOString();
+  await redis.set("employee:" + id, existing);
+  await logEvent("crm", "employee_password_reset", { id, by: actor || "CRM" });
+  return { ok: true, employee: safeEmployee(existing), password };
+}
+
+async function deleteEmployee(id, actor) {
+  const existing = await redis.get("employee:" + id);
+  if (!existing) return { ok: false, error: "employee not found" };
+  await redis.del("employee:" + id);
+  await redis.srem("employees", id);
+  try {
+    if (existing.phone && (await redis.get("staffphone:" + existing.phone)) === id) {
+      await redis.del("staffphone:" + existing.phone);
+    }
+  } catch (e) { /* индекс не критичен */ }
+  await logEvent("crm", "employee_deleted", { id, name: existing.name, by: actor || "CRM" });
+  return { ok: true, id };
+}
+
 const DEMO_CLIENT = {
   id: "demo1", company: "Демо ООО «Пример»", position: "Главный бухгалтер",
   phone: "+998 *** ** 00", status: "active", assignedTo: "Демо-бухгалтер",
@@ -465,6 +571,8 @@ async function updateStatus(num, status, assignee) {
   const prev = task.status;
   task.status = status;
   if (status === "in_progress") task.assignee = assignee || task.assignee || "CRM";
+  if (status === "done") task.doneAt = new Date().toISOString();
+  else if (prev === "done" && status !== "done") task.doneAt = null; // вернули в работу — снимаем метку архивации
   await redis.set("task:" + num, task);
   await logEvent("crm", "status_changed", {
     num, from: prev, to: status,
@@ -587,7 +695,13 @@ module.exports = async (req, res) => {
         const calendar = await listCalendar(companyFilter);
         return res.status(200).json({ ok: true, calendar });
       }
-      return res.status(200).json({ ok: true, service: "Finpulse CRM API", routes: ["ping", "tasks", "logs", "pending", "clients", "client", "calendar"] });
+      if (q.r === "employees") {
+        const isAdmin = !rolesEnforced || (authUser && authUser.role === "admin");
+        if (!isAdmin) return res.status(403).json({ ok: false, error: "forbidden" });
+        const employees = (await listEmployees()).map(safeEmployee);
+        return res.status(200).json({ ok: true, employees });
+      }
+      return res.status(200).json({ ok: true, service: "Finpulse CRM API", routes: ["ping", "tasks", "logs", "pending", "clients", "client", "calendar", "employees"] });
     }
 
     if (req.method === "POST") {
@@ -633,6 +747,34 @@ module.exports = async (req, res) => {
         if (!isAdmin) return res.status(403).json({ ok: false, error: "forbidden" });
         const actor = (authUser && authUser.name) || "CRM";
         const r = await deleteTask(Number(body.num), actor);
+        return res.status(200).json(r);
+      }
+      if (body && body.action === "employee_create") {
+        const isAdmin = !rolesEnforced || (authUser && authUser.role === "admin");
+        if (!isAdmin) return res.status(403).json({ ok: false, error: "forbidden" });
+        const actor = (authUser && authUser.name) || "CRM";
+        const r = await createEmployee(body, actor);
+        return res.status(200).json(r);
+      }
+      if (body && body.action === "employee_update" && body.id) {
+        const isAdmin = !rolesEnforced || (authUser && authUser.role === "admin");
+        if (!isAdmin) return res.status(403).json({ ok: false, error: "forbidden" });
+        const actor = (authUser && authUser.name) || "CRM";
+        const r = await patchEmployee(body.id, body.patch || {}, actor);
+        return res.status(200).json(r);
+      }
+      if (body && body.action === "employee_reset_password" && body.id) {
+        const isAdmin = !rolesEnforced || (authUser && authUser.role === "admin");
+        if (!isAdmin) return res.status(403).json({ ok: false, error: "forbidden" });
+        const actor = (authUser && authUser.name) || "CRM";
+        const r = await resetEmployeePassword(body.id, actor);
+        return res.status(200).json(r);
+      }
+      if (body && body.action === "employee_delete" && body.id) {
+        const isAdmin = !rolesEnforced || (authUser && authUser.role === "admin");
+        if (!isAdmin) return res.status(403).json({ ok: false, error: "forbidden" });
+        const actor = (authUser && authUser.name) || "CRM";
+        const r = await deleteEmployee(body.id, actor);
         return res.status(200).json(r);
       }
       return res.status(200).json({ ok: false, error: "unknown action" });

@@ -133,9 +133,19 @@ module.exports = async (req, res) => {
               return res.status(200).json({ ok: true, token, role: "client", name: u.company });
             }
           }
+
+          /* 2) Пробуем сотрудника по телефону (логин сотрудника, заведённого из CRM) */
+          const staffId = await redis.get("staffphone:" + phone);
+          if (staffId) {
+            const emp = await redis.get("employee:" + staffId);
+            if (emp && emp.active !== false && emp.pwdHash && bcrypt.compareSync(password, emp.pwdHash)) {
+              const token = sign({ sub: emp.id, role: emp.role || "accountant", name: emp.name });
+              return res.status(200).json({ ok: true, token, role: emp.role || "accountant", name: emp.name });
+            }
+          }
         }
 
-        /* 2) Пробуем сотрудника по логину */
+        /* 3) Старый вариант — сотрудник по произвольному логину (bootstrap_admin и более ранние учётки) */
         const emp = await findEmployeeByLogin(identity);
         if (emp && emp.active !== false && emp.pwdHash && bcrypt.compareSync(password, emp.pwdHash)) {
           const token = sign({ sub: emp.id, role: emp.role || "accountant", name: emp.name });
