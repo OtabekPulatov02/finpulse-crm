@@ -5,8 +5,8 @@
    пишет задачу как обычному бухгалтеру (текст + файлы) →
    одна кнопка «Отправить» → задача уходит в группу бухгалтеров.
 
-   Группа: карточка задачи БЕЗ личных данных клиента,
-   кнопки «Взять в работу» / «Выполнена»,
+   Группа: карточка задачи БЕЗ личных данных клиента, без кнопок —
+   исполнитель и статус назначаются только в CRM (канбан/список),
    ответы на карточку пересылаются клиенту и обратно.
    ============================================================ */
 
@@ -673,7 +673,8 @@ bot.callbackQuery("submit", async (ctx) => {
     const base = `🆕 Задача №${num}\n🏢 Компания: ${task.company}\n——————————\n`;
     const tail =
       (task.files.length ? `\n📎 Вложений: ${task.files.length}` : "") +
-      `\n\n⚪️ Статус: Новая`;
+      `\n\n⚪️ Статус: Новая` +
+      `\n👉 Назначьте исполнителя и статус — в CRM.`;
     const room = 3900 - base.length - tail.length;
     let body = task.text;
     let rest = "";
@@ -681,10 +682,7 @@ bot.callbackQuery("submit", async (ctx) => {
       rest = body.slice(room);
       body = body.slice(0, room) + "… (продолжение ⬇️)";
     }
-    const kb = new InlineKeyboard()
-      .text("🙋 Взять в работу", `take:${num}`)
-      .text("✅ Выполнена", `done:${num}`);
-    const gm = await bot.api.sendMessage(group, base + body + tail, { reply_markup: kb });
+    const gm = await bot.api.sendMessage(group, base + body + tail);
     task.gmsg = gm.message_id;
     await redis.set(taskKey(num), task);
     await redis.set(groupRouteKey(gm.message_id), num);
@@ -708,57 +706,19 @@ bot.callbackQuery("submit", async (ctx) => {
   }
 });
 
-/* ---------------- Кнопки в группе ---------------- */
+/* ---------------- Кнопки в группе (устарело) ----------------
+   Раньше отсюда меняли статус/исполнителя прямо в Telegram — теперь это
+   делается только в CRM (канбан/список), чтобы не путать данные между
+   двумя источниками. Новые карточки кнопок больше не содержат; эти
+   обработчики оставлены только на случай, если кто-то нажмёт кнопку на
+   уже отправленной ранее (старой) карточке — просто вежливо отправляем
+   в CRM, ничего не меняя. */
 bot.callbackQuery(/^take:(\d+)$/, async (ctx) => {
-  const num = Number(ctx.match[1]);
-  const task = await redis.get(taskKey(num));
-  if (!task) return ctx.answerCallbackQuery("Задача не найдена");
-  const name =
-    [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(" ") || "бухгалтер";
-  task.status = "in_progress";
-  task.assignee = name;
-  await redis.set(taskKey(num), task);
-  await logEvent("telegram", "task_assigned", { num, assignee: name });
-
-  const header =
-    `🆕 Задача №${num}\n` +
-    `🏢 Компания: ${task.company}\n` +
-    `——————————\n` +
-    `${task.text}\n` +
-    (task.files.length ? `\n📎 Вложений: ${task.files.length}` : "") +
-    `\n\n🔵 Статус: В работе\n👩‍💼 Исполнитель: ${name}`;
-  const kb = new InlineKeyboard().text("✅ Выполнена", `done:${num}`);
-  try {
-    await ctx.editMessageText(header, { reply_markup: kb });
-  } catch (e) {}
-  await ctx.answerCallbackQuery(`Задача №${num} на вас`);
-
-  const clientLang = (await getUser(task.client))?.lang || "ru";
-  await bot.api.sendMessage(task.client, T[clientLang].assigned(num, name));
+  await ctx.answerCallbackQuery({ text: "Назначение исполнителя теперь только в CRM", show_alert: false });
 });
 
 bot.callbackQuery(/^done:(\d+)$/, async (ctx) => {
-  const num = Number(ctx.match[1]);
-  const task = await redis.get(taskKey(num));
-  if (!task) return ctx.answerCallbackQuery("Задача не найдена");
-  task.status = "done";
-  await redis.set(taskKey(num), task);
-  await logEvent("telegram", "task_done", { num, assignee: task.assignee || null });
-
-  const header =
-    `🆕 Задача №${num}\n` +
-    `🏢 Компания: ${task.company}\n` +
-    `——————————\n` +
-    `${task.text}\n` +
-    (task.files.length ? `\n📎 Вложений: ${task.files.length}` : "") +
-    `\n\n🟢 Статус: Выполнена${task.assignee ? `\n👩‍💼 Исполнитель: ${task.assignee}` : ""}`;
-  try {
-    await ctx.editMessageText(header);
-  } catch (e) {}
-  await ctx.answerCallbackQuery(`Задача №${num} закрыта`);
-
-  const clientLang = (await getUser(task.client))?.lang || "ru";
-  await bot.api.sendMessage(task.client, T[clientLang].done(num));
+  await ctx.answerCallbackQuery({ text: "Смена статуса теперь только в CRM", show_alert: false });
 });
 
 /* ---------------- Автоответчик Telegram Business ---------------- */

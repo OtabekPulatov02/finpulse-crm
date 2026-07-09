@@ -372,12 +372,9 @@ async function createTaskFromCrm({ clientId, company, text, assignee, dueDate },
         `${cleanText.slice(0, 3600)}\n\n` +
         `${STATUS_LINE[task.status] || task.status}` +
         (task.assignee ? `\n👩‍💼 Исполнитель: ${task.assignee}` : "") +
-        `\n✍️ Заведена из CRM: ${actor || "CRM"}`;
-      const kb =
-        task.status === "new"
-          ? { inline_keyboard: [[{ text: "🙋 Взять в работу", callback_data: `take:${num}` }, { text: "✅ Выполнена", callback_data: `done:${num}` }]] }
-          : { inline_keyboard: [[{ text: "✅ Выполнена", callback_data: `done:${num}` }]] };
-      const sent = await tg("sendMessage", { chat_id: Number(group), text: header, reply_markup: kb });
+        `\n✍️ Заведена из CRM: ${actor || "CRM"}` +
+        (task.status === "new" ? `\n👉 Назначьте исполнителя и статус — в CRM.` : "");
+      const sent = await tg("sendMessage", { chat_id: Number(group), text: header });
       if (sent && sent.result && sent.result.message_id) {
         task.gmsg = sent.result.message_id;
         await redis.set("task:" + num, task);
@@ -483,14 +480,9 @@ async function updateStatus(num, status, assignee) {
         `${String(task.text).slice(0, 3600)}` +
         (task.files && task.files.length ? `\n📎 Вложений: ${task.files.length}` : "") +
         `\n\n${STATUS_LINE[status] || status}` +
-        (task.assignee && status !== "new" ? `\n👩‍💼 Исполнитель: ${task.assignee}` : "");
-      const kb =
-        status === "new"
-          ? { inline_keyboard: [[{ text: "🙋 Взять в работу", callback_data: `take:${num}` }, { text: "✅ Выполнена", callback_data: `done:${num}` }]] }
-          : status === "in_progress"
-            ? { inline_keyboard: [[{ text: "✅ Выполнена", callback_data: `done:${num}` }]] }
-            : { inline_keyboard: [] };
-      await tg("editMessageText", { chat_id: Number(group), message_id: task.gmsg, text: header, reply_markup: kb });
+        (task.assignee && status !== "new" ? `\n👩‍💼 Исполнитель: ${task.assignee}` : "") +
+        (status === "new" ? `\n👉 Назначьте исполнителя и статус — в CRM.` : "");
+      await tg("editMessageText", { chat_id: Number(group), message_id: task.gmsg, text: header });
     }
   } catch (e) { /* карточки может не быть — не критично */ }
 
