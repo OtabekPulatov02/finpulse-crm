@@ -6,8 +6,15 @@
    GET  /api/crm?r=tasks    → последние задачи из бота (без личных данных)
    GET  /api/crm?r=logs&src=telegram|crm → журнал событий
    GET  /api/crm?r=pending  → компании из бота, ждущие активации
+   GET  /api/crm?r=clients  → список клиентов (реальная БД, client:<id>)
+   GET  /api/crm?r=client&id=<id> → карточка клиента
    POST /api/crm {action:"status", num, status, assignee}
         → смена статуса: Redis + карточка в группе + уведомление клиента
+   POST /api/crm {action:"client_update", id, patch:{...}}
+        → редактирование карточки клиента (только staff)
+   POST /api/crm {action:"client_create", company, phone, position, ...}
+        → создание клиента вручную из CRM, с той же дедупликацией по
+          телефону/названию компании, что и при онбординге в боте
    ============================================================ */
 
 const { Redis } = require("@upstash/redis");
@@ -120,6 +127,161 @@ function maskPhone(p) {
   return String(p).replace(/(\+?\d{3})\d+(\d{2})$/, "$1 *** ** $2");
 }
 
+/* --- Клиенты (реальная сущность client:<id>, та же дедупликация,
+   что и в онбординге бота: индексы по телефону и нормализованному
+   названию компании). Логика намеренно продублирована из api/bot.js
+   (а не вынесена в общий модуль) — так безопаснее раскатывать без
+   риска сломать уже проверенный флоу бота. --------------------------- */
+function normPhone(p) {
+  return String(p || "").replace(/[^\d+]/g, "");
+}
+function normCompany(str) {
+  return String(str || "")
+    .toLowerCase()
+    .replace(/[«»"'‘’“”.,:;()\-–—_/\\]/g, " ")
+    .replace(/\b(ооо|оао|зао|ао|ип|чп|мчж|хк|ooo|oao|llc|ltd|inc|mchj|xk|xt)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function safeClient(c) {
+  if (!c) return null;
+  return {
+    id: c.id,
+    company: c.company,
+    position: c.position || null,
+    phone: maskPhone(c.phone),
+    status: c.status || "pending",
+    assignedTo: c.assignedTo || null,
+    tariff: c.tariff || null,
+    note: c.note || null,
+    createdAt: c.createdAt || null,
+    updatedAt: c.updatedAt || null,
+  };
+}
+
+/* Полная (немаскированная) карточка — только для staff */
+function fullClient(c) {
+  if (!c) return null;
+  return { ...c };
+}
+
+async function listClients() {
+  const ids = (await redis.smembers("clients")) || [];
+  if (!ids.length) return [];
+  const keys = ids.map((id) => "client:" + id);
+  const rows = await redis.mget(...keys);
+  return rows.filter(Boolean).sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+}
+
+async function findClientForPhone(phone) {
+  const p = normPhone(phone);
+  if (!p) return null;
+  const id = await redis.get("clientphone:" + p);
+  return id ? redis.get("client:" + id) : null;
+}
+
+async function findClientForCompany(company) {
+  const n = normCompany(company);
+  if (!n) return null;
+  const id = await redis.get("clientcompany:" + n);
+  return id ? redis.get("client:" + id) : null;
+}
+
+/* Уведомление группы бухгалтеров (без grammY — тот же приём, что и tg() выше) */
+async function notifyGroup(text) {
+  try {
+    const group = await redis.get("group");
+    if (group) await tg("sendMessage", { chat_id: Number(group), text });
+  } catch (e) { /* noop */ }
+}
+
+/* Создание/обновление клиента вручную из CRM — та же дедупликация,
+   что и upsertClient() в боте: по нормализованному названию компании
+   и по телефону. При конфликте (телефон уже занят другой компанией)
+   не сливаем автоматически. */
+async function upsertClientFromCrm({ company, phone, position, tariff, assignedTo, note }, actor) {
+  if (!company || !String(company).trim()) return { ok: false, error: "company required" };
+  const normC = normCompany(company);
+  const normP = phone ? normPhone(phone) : null;
+
+  const idByCompany = await redis.get("clientcompany:" + normC);
+  const idByPhone = normP ? await redis.get("clientphone:" + normP) : null;
+
+  if (idByPhone && (!idByCompany || idByCompany !== idByPhone)) {
+    const phoneOwner = await redis.get("client:" + idByPhone);
+    const phoneOwnerNormCompany = normCompany(phoneOwner?.company || "");
+    if (phoneOwnerNormCompany && phoneOwnerNormCompany !== normC) {
+      await logEvent("crm", "client_conflict", { company, phone: normP, idByCompany, idByPhone, by: actor || "CRM" });
+      await notifyGroup(`⚠️ Похоже на дубликат клиента: «${company}» — телефон уже привязан к другой карточке («${phoneOwner?.company || "?"}"). Проверьте вручную в разделе «Клиенты».`);
+      return { ok: false, error: "phone belongs to a different client", conflictId: idByPhone };
+    }
+  }
+
+  const id = idByCompany || idByPhone;
+  const now = new Date().toISOString();
+  if (id) {
+    const existing = (await redis.get("client:" + id)) || {};
+    const merged = {
+      ...existing,
+      id,
+      company: existing.company || company,
+      position: position ?? existing.position ?? null,
+      phone: existing.phone || normP,
+      tariff: tariff ?? existing.tariff ?? null,
+      assignedTo: assignedTo ?? existing.assignedTo ?? null,
+      note: note ?? existing.note ?? null,
+      status: existing.status || "pending",
+      updatedAt: now,
+    };
+    await redis.set("client:" + id, merged);
+    if (!idByCompany) await redis.set("clientcompany:" + normC, id);
+    if (normP && !idByPhone) await redis.set("clientphone:" + normP, id);
+    await logEvent("crm", "client_updated", { id, company: merged.company, by: actor || "CRM" });
+    return { ok: true, id, merged: true, client: fullClient(merged) };
+  }
+
+  const newId = "c" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const rec = {
+    id: newId,
+    company,
+    position: position || null,
+    phone: normP,
+    tariff: tariff || null,
+    assignedTo: assignedTo || null,
+    note: note || null,
+    status: "active",
+    createdAt: now,
+    updatedAt: now,
+  };
+  await redis.set("client:" + newId, rec);
+  await redis.set("clientcompany:" + normC, newId);
+  if (normP) await redis.set("clientphone:" + normP, newId);
+  await redis.sadd("clients", newId);
+  await logEvent("crm", "client_created", { id: newId, company, by: actor || "CRM" });
+  return { ok: true, id: newId, merged: false, client: fullClient(rec) };
+}
+
+async function patchClient(id, patch, actor) {
+  const existing = await redis.get("client:" + id);
+  if (!existing) return { ok: false, error: "client not found" };
+  const allowed = ["status", "assignedTo", "tariff", "note", "position"];
+  const next = { ...existing };
+  for (const k of allowed) {
+    if (Object.prototype.hasOwnProperty.call(patch || {}, k)) next[k] = patch[k];
+  }
+  next.updatedAt = new Date().toISOString();
+  await redis.set("client:" + id, next);
+  await logEvent("crm", "client_updated", { id, fields: Object.keys(patch || {}), by: actor || "CRM" });
+  return { ok: true, client: fullClient(next) };
+}
+
+const DEMO_CLIENT = {
+  id: "demo1", company: "Демо ООО «Пример»", position: "Главный бухгалтер",
+  phone: "+998 *** ** 00", status: "active", assignedTo: "Демо-бухгалтер",
+  tariff: "Стандарт", note: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+};
+
 async function listTasks() {
   const n = Number((await redis.get("counter:task")) || 0);
   if (!n) return [];
@@ -228,7 +390,35 @@ module.exports = async (req, res) => {
         const pending = rows.map((r) => { try { const o = typeof r === "string" ? JSON.parse(r) : r; return { company: o.company, phone: maskPhone(o.phone), at: o.at || o.ts || null }; } catch { return null; } }).filter(Boolean);
         return res.status(200).json({ ok: true, pending });
       }
-      return res.status(200).json({ ok: true, service: "Finpulse CRM API", routes: ["ping", "tasks", "logs", "pending"] });
+      if (q.r === "clients") {
+        if (rolesEnforced && authUser.role === "guest") {
+          return res.status(200).json({ ok: true, clients: [DEMO_CLIENT], demo: true });
+        }
+        if (rolesEnforced && authUser.role === "client") {
+          const mine = await findClientForCompany(authUser.company);
+          return res.status(200).json({ ok: true, clients: mine ? [fullClient(mine)] : [] });
+        }
+        const all = await listClients();
+        const isAdmin = !rolesEnforced || authUser.role === "admin";
+        return res.status(200).json({ ok: true, clients: all.map(isAdmin ? fullClient : safeClient) });
+      }
+      if (q.r === "client") {
+        if (!q.id) return res.status(200).json({ ok: false, error: "id required" });
+        const c = await redis.get("client:" + q.id);
+        if (!c) return res.status(404).json({ ok: false, error: "not found" });
+        if (rolesEnforced && authUser.role === "guest") {
+          return res.status(200).json({ ok: true, client: DEMO_CLIENT });
+        }
+        if (rolesEnforced && authUser.role === "client") {
+          if (normCompany(c.company) !== normCompany(authUser.company || "")) {
+            return res.status(403).json({ ok: false, error: "forbidden" });
+          }
+          return res.status(200).json({ ok: true, client: fullClient(c) });
+        }
+        const isAdmin = !rolesEnforced || authUser.role === "admin";
+        return res.status(200).json({ ok: true, client: (isAdmin ? fullClient : safeClient)(c) });
+      }
+      return res.status(200).json({ ok: true, service: "Finpulse CRM API", routes: ["ping", "tasks", "logs", "pending", "clients", "client"] });
     }
 
     if (req.method === "POST") {
@@ -240,6 +430,16 @@ module.exports = async (req, res) => {
           return res.status(200).json({ ok: false, error: "bad status" });
         }
         const r = await updateStatus(Number(body.num), body.status, body.assignee);
+        return res.status(200).json(r);
+      }
+      if (body && body.action === "client_create") {
+        const actor = (authUser && authUser.name) || "CRM";
+        const r = await upsertClientFromCrm(body, actor);
+        return res.status(200).json(r);
+      }
+      if (body && body.action === "client_update" && body.id) {
+        const actor = (authUser && authUser.name) || "CRM";
+        const r = await patchClient(body.id, body.patch || {}, actor);
         return res.status(200).json(r);
       }
       return res.status(200).json({ ok: false, error: "unknown action" });
