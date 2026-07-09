@@ -34,12 +34,104 @@ function genPassword() {
 }
 async function ensureClientCredentials(ctx, u) {
   if (!u.phone || u.pwdHash) return null; // уже есть пароль, либо телефон не указан
+  return issueClientPassword(ctx, u);
+}
+
+/* Проверяет, не привязан ли телефон уже к другому Telegram-аккаунту в CRM,
+   прежде чем выдать/перевыпустить пароль. Если тот же клиент сменил
+   аккаунт — перепривязываем. Если телефон уже занят ДРУГОЙ компанией —
+   не выдаём доступ автоматически и зовём бухгалтеров разобраться. */
+async function issueClientPassword(ctx, u) {
   const phone = normPhone(u.phone);
+  const existingOwnerId = await redis.get("authphone:" + phone);
+  if (existingOwnerId && String(existingOwnerId) !== String(ctx.from.id)) {
+    const otherUser = await getUser(existingOwnerId);
+    const sameCompany = otherUser && u.company && normCompany(otherUser.company || "") === normCompany(u.company || "");
+    if (!sameCompany) {
+      await logEvent("telegram", "phone_conflict", {
+        phone, company: u.company, otherTelegramId: String(existingOwnerId), otherCompany: otherUser?.company || null,
+      });
+      const group = await redis.get("group");
+      if (group) {
+        try {
+          await bot.api.sendMessage(group,
+            `⚠️ Телефон ${phone} уже привязан к другой карточке в CRM (компания: «${otherUser?.company || "?"}"). ` +
+            `Новая регистрация: «${u.company}». Доступ в кабинет не выдан автоматически — нужна проверка вручную в разделе «Клиенты».`);
+        } catch (e) { /* noop */ }
+      }
+      return null;
+    }
+    /* тот же клиент, новый Telegram-аккаунт — старый логин по этому телефону перестаёт работать */
+  }
   const password = genPassword();
   u.pwdHash = bcrypt.hashSync(password, 10);
   u.authPhone = phone;
   await redis.set("authphone:" + phone, ctx.from.id);
   return password;
+}
+
+/* ---------------- Реальная карточка клиента (дедуп по телефону/компании) ----------------
+   Индексы:
+     clientcompany:<normCompany> -> client id
+     clientphone:<normPhone>     -> client id
+     clients                     -> set всех id
+   При конфликте (телефон уже привязан к карточке ДРУГОЙ компании) —
+   не сливаем автоматически, а логируем и уведомляем группу. */
+async function upsertClient(u, telegramId) {
+  if (!u.company) return null;
+  const normC = normCompany(u.company);
+  const phone = u.phone ? normPhone(u.phone) : null;
+
+  const idByCompany = await redis.get("clientcompany:" + normC);
+  const idByPhone = phone ? await redis.get("clientphone:" + phone) : null;
+
+  if (idByCompany && idByPhone && idByCompany !== idByPhone) {
+    await logEvent("telegram", "client_conflict", { company: u.company, phone, idByCompany, idByPhone });
+    const group = await redis.get("group");
+    if (group) {
+      try {
+        await bot.api.sendMessage(group,
+          `⚠️ Похоже на дубликат клиента: «${u.company}» — телефон ${phone} уже привязан к другой карточке. Проверьте вручную в разделе «Клиенты».`);
+      } catch (e) { /* noop */ }
+    }
+    return idByCompany;
+  }
+
+  const id = idByCompany || idByPhone;
+  if (id) {
+    const existing = (await redis.get("client:" + id)) || {};
+    const merged = {
+      ...existing,
+      id,
+      company: existing.company || u.company,
+      position: existing.position || u.position || null,
+      phone: existing.phone || phone,
+      telegramId,
+      updatedAt: new Date().toISOString(),
+    };
+    await redis.set("client:" + id, merged);
+    if (!idByCompany) await redis.set("clientcompany:" + normC, id);
+    if (phone && !idByPhone) await redis.set("clientphone:" + phone, id);
+    return id;
+  }
+
+  const newId = "c" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const rec = {
+    id: newId,
+    company: u.company,
+    position: u.position || null,
+    phone,
+    telegramId,
+    status: "pending",
+    assignedTo: null,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  await redis.set("client:" + newId, rec);
+  await redis.set("clientcompany:" + normC, newId);
+  if (phone) await redis.set("clientphone:" + phone, newId);
+  await redis.sadd("clients", newId);
+  return newId;
 }
 
 /* ---------------- Тексты интерфейса ---------------- */
@@ -73,11 +165,13 @@ const T = {
     askPhone: "И последнее: отправьте номер телефона — по нему мы точно привяжем вас к вашей компании в системе 📱",
     btnShareContact: "📱 Отправить мой номер",
     btnSkip: "Пропустить",
+    askPosition: "Подскажите вашу должность в компании (например: главный бухгалтер, директор) ✍️",
     companyConfirm: (m) => `Похоже, вы из этой компании:\n\n🏢 ${m}\n\nВерно?`,
     btnYes: "✅ Да, верно",
     btnNo: "✍️ Нет, другая",
     crmCreds: (login, pass) =>
       `🔐 Доступ в личный кабинет CRM:\nСайт: ${process.env.CRM_APP_URL || "https://finpulse-crm-app.vercel.app"}\nЛогин (телефон): ${login}\nПароль: ${pass}\n\nПароль выдаётся один раз — сохраните его. Сменить можно, написав в чат «/password».`,
+    crmPending: "🔐 Этот телефон уже привязан к другой карточке клиента в CRM. Доступ в кабинет выдадим после проверки бухгалтером.",
   },
   uz: {
     askCompany: "Ajoyib! 🇺🇿\nKompaniyangiz nomi qanday? Bitta xabar bilan yozing.",
@@ -108,11 +202,13 @@ const T = {
     askPhone: "Va nihoyat: telefon raqamingizni yuboring — u orqali sizni tizimdagi kompaniyangizga aniq bog'laymiz 📱",
     btnShareContact: "📱 Raqamimni yuborish",
     btnSkip: "O'tkazib yuborish",
+    askPosition: "Kompaniyadagi lavozimingizni yozing (masalan: bosh buxgalter, direktor) ✍️",
     companyConfirm: (m) => `Siz shu kompaniyadansiz shekilli:\n\n🏢 ${m}\n\nTo'g'rimi?`,
     btnYes: "✅ Ha, to'g'ri",
     btnNo: "✍️ Yo'q, boshqa",
     crmCreds: (login, pass) =>
       `🔐 CRM shaxsiy kabinetiga kirish:\nSayt: ${process.env.CRM_APP_URL || "https://finpulse-crm-app.vercel.app"}\nLogin (telefon): ${login}\nParol: ${pass}\n\nParol faqat bir marta beriladi — saqlab qo'ying. O'zgartirish uchun chatga «/password» yozing.`,
+    crmPending: "🔐 Bu telefon raqami CRM'da boshqa mijoz kartasiga biriktirilgan. Kabinetga kirish buxgalter tekshiruvidan so'ng beriladi.",
   },
   en: {
     askCompany: "Great! 🇬🇧\nWhat is your company name? Send it in one message.",
@@ -143,11 +239,13 @@ const T = {
     askPhone: "One last thing: share your phone number — we use it to link you to your company in our system 📱",
     btnShareContact: "📱 Share my number",
     btnSkip: "Skip",
+    askPosition: "What's your position at the company (e.g. chief accountant, director)? ✍️",
     companyConfirm: (m) => `Looks like you are from:\n\n🏢 ${m}\n\nIs that right?`,
     btnYes: "✅ Yes, correct",
     btnNo: "✍️ No, different",
     crmCreds: (login, pass) =>
       `🔐 CRM portal access:\nSite: ${process.env.CRM_APP_URL || "https://finpulse-crm-app.vercel.app"}\nLogin (phone): ${login}\nPassword: ${pass}\n\nThe password is issued once — please save it. To change it, write "/password" in this chat.`,
+    crmPending: "🔐 This phone number is already linked to another client record in the CRM. Portal access will be granted after an accountant reviews it.",
   },
 };
 
@@ -271,14 +369,30 @@ async function notifyNewCompany(u) {
   }
 }
 
+async function afterCompanySet(ctx, u) {
+  const t = T[u.lang];
+  if (!u.position) {
+    u.state = "position";
+    await setUser(ctx.from.id, u);
+    return ctx.reply(t.askPosition, { reply_markup: { keyboard: [[{ text: t.btnSkip }]], resize_keyboard: true, one_time_keyboard: true } });
+  }
+  u.state = u.phone ? "idle" : "phone";
+  await setUser(ctx.from.id, u);
+  if (u.state === "idle") return finishOnboarding(ctx, u);
+  return ctx.reply(t.askPhone, { reply_markup: phoneKb(t) });
+}
+
 async function finishOnboarding(ctx, u) {
   const t = T[u.lang];
   await notifyNewCompany(u);
   const newPassword = await ensureClientCredentials(ctx, u);
+  await upsertClient(u, ctx.from.id);
   await setUser(ctx.from.id, u);
   await ctx.reply(t.ready(u.company), { reply_markup: mainKb(u.lang) });
   if (newPassword) {
     await ctx.reply(t.crmCreds(u.authPhone, newPassword));
+  } else if (u.phone && !u.pwdHash) {
+    await ctx.reply(t.crmPending);
   }
   return;
 }
@@ -423,13 +537,12 @@ bot.command("password", async (ctx) => {
   const u = await getUser(ctx.from.id);
   if (!u || !u.lang) return ctx.reply(HELLO, { reply_markup: LANG_KB });
   if (!u.phone) return ctx.reply(T[u.lang].askPhone, { reply_markup: phoneKb(T[u.lang]) });
-  const phone = normPhone(u.phone);
-  const password = genPassword();
-  u.pwdHash = bcrypt.hashSync(password, 10);
-  u.authPhone = phone;
-  await redis.set("authphone:" + phone, ctx.from.id);
+  const password = await issueClientPassword(ctx, u);
   await setUser(ctx.from.id, u);
-  return ctx.reply(T[u.lang].crmCreds(phone, password));
+  if (!password) {
+    return ctx.reply(T[u.lang].crmPending);
+  }
+  return ctx.reply(T[u.lang].crmCreds(u.authPhone, password));
 });
 
 /* ---------------- Команды: группа ---------------- */
@@ -496,11 +609,8 @@ bot.callbackQuery(/^comp:(yes|no)$/, async (ctx) => {
   }
   delete u.pendingCompany;
   delete u.matchedCompany;
-  u.state = u.phone ? "idle" : "phone";
-  await setUser(ctx.from.id, u);
   await ctx.answerCallbackQuery("🏢 " + u.company);
-  if (u.state === "idle") return finishOnboarding(ctx, u);
-  return ctx.reply(t.askPhone, { reply_markup: phoneKb(t) });
+  return afterCompanySet(ctx, u);
 });
 
 /* ---------------- Отправка / отмена задачи ---------------- */
@@ -718,6 +828,14 @@ bot.on("message", async (ctx) => {
       await redis.sadd("companies", u.company);
       u.isNewCompany = true;
     }
+    return afterCompanySet(ctx, u);
+  }
+
+  /* Онбординг: должность контактного лица */
+  if (u.state === "position") {
+    const txt = (msg.text || "").trim();
+    const isSkip = Object.keys(T).some((l) => txt === T[l].btnSkip);
+    if (!isSkip && txt) u.position = txt.slice(0, 80);
     u.state = u.phone ? "idle" : "phone";
     await setUser(ctx.from.id, u);
     if (u.state === "idle") return finishOnboarding(ctx, u);
