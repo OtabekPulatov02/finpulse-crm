@@ -15,11 +15,14 @@
    POST /api/crm {action:"client_create", company, phone, position, ...}
         → создание клиента вручную из CRM, с той же дедупликацией по
           телефону/названию компании, что и при онбординге в боте
-   POST /api/crm {action:"task_create", clientId?, company?, text, assignee?}
+   POST /api/crm {action:"task_create", clientId?, company?, text, assignee?, dueDate?}
         → создание задачи из CRM: карточка в группу + уведомление клиенту
           в его телеграме (если clientId привязан к telegramId)
-   POST /api/crm {action:"task_update", num, patch:{text?, assignee?, company?}}
-        → редактирование полей задачи (только staff)
+   POST /api/crm {action:"task_update", num, patch:{text?, assignee?, company?, dueDate?}}
+        → редактирование полей задачи, включая срок (dueDate, "YYYY-MM-DD")
+   GET  /api/crm?r=calendar → задачи со сроком (dueDate), не выполненные,
+        с флагами overdue/dueToday — источник для напоминаний Vercel Cron
+        (см. api/cron/reminders.js) и календаря на фронте
    ============================================================ */
 
 const { Redis } = require("@upstash/redis");
@@ -128,6 +131,7 @@ function safeTask(t) {
     assignee: t.assignee || null,
     createdAt: t.createdAt || null,
     files: Array.isArray(t.files) ? t.files.length : 0,
+    dueDate: t.dueDate || null,
   };
 }
 
@@ -302,9 +306,10 @@ async function listTasks() {
   return rows.filter(Boolean).map(safeTask);
 }
 
-async function createTaskFromCrm({ clientId, company, text, assignee }, actor) {
+async function createTaskFromCrm({ clientId, company, text, assignee, dueDate }, actor) {
   const cleanText = String(text || "").trim();
   if (!cleanText) return { ok: false, error: "text required" };
+  const cleanDue = /^\d{4}-\d{2}-\d{2}$/.test(String(dueDate || "")) ? dueDate : null;
 
   let telegramId = null;
   let finalCompany = company || null;
@@ -330,8 +335,10 @@ async function createTaskFromCrm({ clientId, company, text, assignee }, actor) {
     assignee: assignee || null,
     createdAt: new Date().toISOString(),
     source: "crm",
+    dueDate: cleanDue,
   };
   await redis.set("task:" + num, task);
+  if (cleanDue) await redis.sadd("tasks:withdue", num);
   if (telegramId) {
     await redis.lpush("utasks:" + telegramId, num);
     await redis.ltrim("utasks:" + telegramId, 0, 19);
@@ -379,10 +386,53 @@ async function patchTask(num, patch, actor) {
   for (const k of allowed) {
     if (Object.prototype.hasOwnProperty.call(patch || {}, k)) task[k] = patch[k];
   }
+  if (Object.prototype.hasOwnProperty.call(patch || {}, "dueDate")) {
+    const raw = patch.dueDate;
+    const cleanDue = raw && /^\d{4}-\d{2}-\d{2}$/.test(String(raw)) ? raw : null;
+    task.dueDate = cleanDue;
+    if (cleanDue) await redis.sadd("tasks:withdue", num);
+    else await redis.srem("tasks:withdue", num);
+    // сбрасываем отметку о последнем напоминании — дата изменилась
+    delete task.lastReminderDate;
+  }
   task.updatedAt = new Date().toISOString();
   await redis.set("task:" + num, task);
   await logEvent("crm", "task_updated", { num, fields: Object.keys(patch || {}), by: actor || "CRM" });
   return { ok: true, task: safeTask(task) };
+}
+
+/* --- Календарь напоминаний: задачи со сроком (dueDate), индекс —
+   множество "tasks:withdue" (номера задач с непустым dueDate). При
+   выполнении задачи (updateStatus → done) убираем её из индекса,
+   чтобы не слать напоминания по закрытым задачам. --------------- */
+async function listCalendar(companyFilter) {
+  const nums = await redis.smembers("tasks:withdue");
+  if (!nums || !nums.length) return [];
+  const keys = nums.map((n) => "task:" + n);
+  const rows = (await redis.mget(...keys)).filter(Boolean);
+  const todayStr = tashkentDateStr();
+  let list = rows
+    .filter((t) => t.dueDate && t.status !== "done")
+    .map((t) => ({
+      num: t.num,
+      company: t.company,
+      text: t.text,
+      status: t.status,
+      assignee: t.assignee || null,
+      dueDate: t.dueDate,
+      overdue: t.dueDate < todayStr,
+      dueToday: t.dueDate === todayStr,
+    }));
+  if (companyFilter) list = list.filter((t) => normCompany(t.company) === normCompany(companyFilter));
+  list.sort((a, b) => (a.dueDate < b.dueDate ? -1 : a.dueDate > b.dueDate ? 1 : 0));
+  return list;
+}
+
+function tashkentDateStr(d) {
+  const dt = d || new Date();
+  // Ташкент UTC+5, без перехода на летнее время
+  const t = new Date(dt.getTime() + 5 * 3600 * 1000);
+  return t.toISOString().slice(0, 10);
 }
 
 async function updateStatus(num, status, assignee) {
@@ -510,7 +560,15 @@ module.exports = async (req, res) => {
         const isAdmin = !rolesEnforced || authUser.role === "admin";
         return res.status(200).json({ ok: true, client: (isAdmin ? fullClient : safeClient)(c) });
       }
-      return res.status(200).json({ ok: true, service: "Finpulse CRM API", routes: ["ping", "tasks", "logs", "pending", "clients", "client"] });
+      if (q.r === "calendar") {
+        if (rolesEnforced && authUser.role === "guest") {
+          return res.status(200).json({ ok: true, calendar: [], demo: true });
+        }
+        const companyFilter = rolesEnforced && authUser.role === "client" ? authUser.company : null;
+        const calendar = await listCalendar(companyFilter);
+        return res.status(200).json({ ok: true, calendar });
+      }
+      return res.status(200).json({ ok: true, service: "Finpulse CRM API", routes: ["ping", "tasks", "logs", "pending", "clients", "client", "calendar"] });
     }
 
     if (req.method === "POST") {
