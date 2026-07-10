@@ -166,56 +166,28 @@ async function processTaskReminders(todayStr) {
 
 async function processCalendarEvents(todayStr) {
   const ids = (await redis.smembers("calendarevents")) || [];
-  if (!ids.length) return { checked: 0, notified: 0, advanced: 0, deactivated: 0, tasksCreated: 0 };
+  if (!ids.length) return { checked: 0, advanced: 0, deactivated: 0, tasksCreated: 0 };
 
   const keys = ids.map((id) => "calendarevent:" + id);
   const rows = (await redis.mget(...keys)).filter(Boolean).filter((e) => e.active !== false);
 
-  let notified = 0, advanced = 0, deactivated = 0, tasksCreated = 0;
-  const THREE_HOURS_MS = 3 * 3600 * 1000;
-  const now = new Date();
+  let advanced = 0, deactivated = 0, tasksCreated = 0;
 
+  /* Основной, "живой" путь создания задачи из напоминания — это
+     ensureDueReminderTasks() в api/crm.js, который срабатывает при любом
+     обращении к /api/crm?r=tasks|calendar_events из самого CRM (без
+     зависимости от крона вообще). Этот код — лишь подстраховка на
+     случай, если CRM никто не открывал: та же логика (создать задачу
+     ровно один раз за цикл через ev.taskCreatedFor, затем перенести
+     событие на следующий цикл повтора), продублированная здесь по тем
+     же причинам, что и остальные дублирования в проекте. Отдельного
+     предварительного "🔔 Напоминание"-сообщения больше нет — сама
+     созданная задача с карточкой в группе и есть уведомление. */
   for (const ev of rows) {
     const remindFrom = addDays(ev.date, -(ev.remindDays || 0));
-    const inWindow = todayStr >= remindFrom;
-    /* Раньше напоминали максимум раз в день (lastNotifiedDate — просто
-       "YYYY-MM-DD"). Крон теперь запускается каждые 3 часа, и в CRM
-       напоминание должно приходить с той же частотой всё то время, пока
-       окно открыто — поэтому кулдаун теперь по времени, а не по дате. */
-    const lastAt = ev.lastNotifiedAt ? new Date(ev.lastNotifiedAt).getTime() : 0;
-    const cooldownPassed = !lastAt || (now.getTime() - lastAt) >= THREE_HOURS_MS;
-    /* Если бухгалтер уже вручную отметил напоминание "Выполнено" в этом
-       цикле — не дёргаем его каждые 3 часа повторно; статус сбрасывается
-       на "new" при переходе к следующему циклу повторения. */
-    const shouldNotify = inWindow && cooldownPassed && ev.status !== "done";
+    const due = todayStr >= remindFrom;
 
-    if (shouldNotify) {
-      try {
-        const label = ev.type === "tax" ? "Налог/отчёт" : "Платёж";
-        const companyLabel = ev.company || "Все клиенты";
-        const tag = todayStr > ev.date ? " (просрочено)" : todayStr === ev.date ? " (сегодня)" : "";
-        const text =
-          `🔔 <b>Напоминание</b>\n\n` +
-          `Тип: ${label}\n` +
-          `Название: ${escapeHtml(ev.title)}\n` +
-          `Компания: ${escapeHtml(companyLabel)}\n` +
-          `Срок: ${ev.date}${tag}`;
-        await tgToGroup("sendMessage", { text, parse_mode: "HTML" });
-        ev.lastNotifiedDate = todayStr;
-        ev.lastNotifiedAt = now.toISOString();
-        notified++;
-      } catch (e) { /* noop */ }
-    }
-
-    /* Как только наступает окно напоминания, заводим настоящую задачу в
-       CRM (статус "Новая", без исполнителя) — раньше событие календаря
-       только слало сообщение в Telegram и никак не попадало в раздел
-       "Задачи". ev.taskCreatedFor хранит дату цикла, для которой задача
-       уже создана — без этого при многодневном окне (remindDays > 0)
-       получили бы по дубликату задачи на каждый день до срока. Общие
-       напоминания без company ("Все клиенты") в задачу не превращаем —
-       у задачи обязательно должна быть компания. */
-    if (inWindow && ev.status !== "done" && ev.company && ev.taskCreatedFor !== ev.date) {
+    if (due && ev.company && ev.taskCreatedFor !== ev.date) {
       try {
         const n = await redis.incr("counter:task");
         const num = 100 + n;
@@ -249,8 +221,8 @@ async function processCalendarEvents(todayStr) {
         }
 
         const header =
-          `🆕 Задача №${num}\n🏢 Компания: ${escapeHtml(ev.company)}\n——————————\n` +
-          `${escapeHtml(task.text)}\n\n⚪️ Статус: Новая\n👉 Назначьте исполнителя и статус — в CRM.`;
+          `🆕 Задача №${num}\n🏢 Компания: ${ev.company}\n——————————\n` +
+          `${task.text}\n\n⚪️ Статус: Новая\n👉 Назначьте исполнителя и статус — в CRM.`;
         const sent = await tgToGroup("sendMessage", { text: header });
         if (sent && sent.ok && sent.result && sent.result.message_id) {
           task.gmsg = sent.result.message_id;
@@ -267,10 +239,7 @@ async function processCalendarEvents(todayStr) {
       const next = advanceDate(ev.date, ev.repeat);
       if (next) {
         ev.date = next;
-        ev.lastNotifiedDate = null;
-        ev.lastNotifiedAt = null;
         ev.taskCreatedFor = null; // новый цикл повторения — задачу можно будет завести заново
-        ev.status = "new"; // тоже сбрасывается на новый цикл
         advanced++;
       } else {
         ev.active = false;
@@ -281,7 +250,7 @@ async function processCalendarEvents(todayStr) {
     try { await redis.set("calendarevent:" + ev.id, ev); } catch (e) { /* noop */ }
   }
 
-  return { checked: rows.length, notified, advanced, deactivated, tasksCreated };
+  return { checked: rows.length, advanced, deactivated, tasksCreated };
 }
 
 module.exports = async (req, res) => {
