@@ -702,6 +702,7 @@ function safeCalendarEvent(e) {
     repeat: e.repeat || "once",
     remindDays: typeof e.remindDays === "number" ? e.remindDays : 3,
     active: e.active !== false,
+    status: CE_STATUSES.includes(e.status) ? e.status : "new",
     createdAt: e.createdAt || null,
   };
 }
@@ -717,6 +718,7 @@ async function listCalendarEvents() {
 
 const CE_REPEATS = ["once", "monthly", "quarterly", "yearly"];
 const CE_REMIND_OPTIONS = [0, 1, 3, 7];
+const CE_STATUSES = ["new", "in_progress", "done"];
 
 async function createCalendarEvent(body, actor) {
   const { type, title, company, date, repeat, remindDays } = body || {};
@@ -730,7 +732,7 @@ async function createCalendarEvent(body, actor) {
     id, type, title: formatSumsInText(String(title).trim()),
     company: company ? String(company).trim() : null,
     date: String(date), repeat: rep, remindDays: rd,
-    active: true, lastNotifiedDate: null,
+    active: true, status: "new", lastNotifiedDate: null,
     createdAt: new Date().toISOString(),
   };
   await redis.set("calendarevent:" + id, ev);
@@ -749,6 +751,7 @@ async function patchCalendarEvent(id, patch, actor) {
   if (p.date !== undefined && /^\d{4}-\d{2}-\d{2}$/.test(String(p.date))) next.date = String(p.date);
   if (p.repeat !== undefined && CE_REPEATS.includes(p.repeat)) next.repeat = p.repeat;
   if (p.remindDays !== undefined && CE_REMIND_OPTIONS.includes(Number(p.remindDays))) next.remindDays = Number(p.remindDays);
+  if (p.status !== undefined && CE_STATUSES.includes(p.status)) next.status = p.status;
   if (p.active !== undefined) next.active = !!p.active;
   next.updatedAt = new Date().toISOString();
   await redis.set("calendarevent:" + id, next);
