@@ -60,6 +60,10 @@ async function tgToGroup(method, payload) {
   return resp;
 }
 
+/* Компания по умолчанию для напоминаний без конкретного клиента ("Все
+   клиенты") — должна совпадать с DEFAULT_REMINDER_COMPANY в api/crm.js. */
+const DEFAULT_REMINDER_COMPANY = "OOO Finpulse";
+
 function normCompany(str) {
   return String(str || "")
     .toLowerCase()
@@ -187,15 +191,19 @@ async function processCalendarEvents(todayStr) {
     const remindFrom = addDays(ev.date, -(ev.remindDays || 0));
     const due = todayStr >= remindFrom;
 
-    if (due && ev.company && ev.taskCreatedFor !== ev.date) {
+    if (due && ev.taskCreatedFor !== ev.date) {
       try {
+        /* Общие напоминания без company ("Все клиенты") заводим на
+           внутреннюю компанию фирмы — как и в ensureDueReminderTasks()
+           в api/crm.js. */
+        const evCompany = ev.company || DEFAULT_REMINDER_COMPANY;
         const n = await redis.incr("counter:task");
         const num = 100 + n;
         const label = ev.type === "tax" ? "Налог/отчёт" : "Платёж";
         const task = {
           num,
           client: null,
-          company: ev.company,
+          company: evCompany,
           text: `${label}: ${ev.title} (срок ${ev.date})`,
           files: [],
           status: "new",
@@ -206,7 +214,7 @@ async function processCalendarEvents(todayStr) {
           fromCalendarEvent: ev.id,
         };
         try {
-          const clientId = await redis.get("clientcompany:" + normCompany(ev.company));
+          const clientId = await redis.get("clientcompany:" + normCompany(evCompany));
           if (clientId) {
             const cl = await redis.get("client:" + clientId);
             if (cl && cl.telegramId) task.client = cl.telegramId;
@@ -221,7 +229,7 @@ async function processCalendarEvents(todayStr) {
         }
 
         const header =
-          `🆕 Задача №${num}\n🏢 Компания: ${ev.company}\n——————————\n` +
+          `🆕 Задача №${num}\n🏢 Компания: ${evCompany}\n——————————\n` +
           `${task.text}\n\n⚪️ Статус: Новая\n👉 Назначьте исполнителя и статус — в CRM.`;
         const sent = await tgToGroup("sendMessage", { text: header });
         if (sent && sent.ok && sent.result && sent.result.message_id) {
