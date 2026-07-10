@@ -557,33 +557,51 @@ async function patchTask(num, patch, actor) {
    бухгалтеров через Bot API (sendPhoto/sendDocument), а полученный оттуда
    file_id сохраняется в task.files — так вложение остаётся в той же
    Telegram-инфраструктуре, что и файлы, приходящие из бота. */
+async function sendTgFile(group, method, field, buf, filename, mimeType, caption, replyTo) {
+  const form = new FormData();
+  form.append("chat_id", String(group));
+  if (caption) form.append("caption", caption);
+  if (replyTo) {
+    form.append("reply_to_message_id", String(replyTo));
+    /* Если сообщение, на которое ссылаемся, к этому моменту удалено или
+       недоступно, Telegram без этого флага отклонит ВЕСЬ запрос (и файл
+       вместе с ним) с "Bad Request: message to reply not found" — из-за
+       этого валидные вложения падали с общей ошибкой "Telegram отклонил
+       файл". allow_sending_without_reply просто отправляет файл обычным
+       сообщением в таком случае, вместо жёсткого отказа. */
+    form.append("allow_sending_without_reply", "true");
+  }
+  form.append(field, new Blob([buf], { type: mimeType || "application/octet-stream" }), filename || "file");
+  const r = await fetch(`https://api.telegram.org/bot${TOKEN}/${method}`, { method: "POST", body: form });
+  return r.json();
+}
+
 async function attachFileToTask(task, buf, filename, mimeType, actor, fromClient) {
   const group = await redis.get("group");
   if (!group) return { ok: false, error: "Группа бухгалтеров не настроена — файл не отправлен" };
 
   const isImage = /^image\//.test(mimeType || "");
-  const method = isImage ? "sendPhoto" : "sendDocument";
-  const field = isImage ? "photo" : "document";
   const caption = `📎 к задаче №${task.num} (из CRM, от ${actor || "CRM"})`.slice(0, 1024);
-
-  const form = new FormData();
-  form.append("chat_id", String(group));
-  form.append("caption", caption);
-  if (task.gmsg) form.append("reply_to_message_id", String(task.gmsg));
-  form.append(field, new Blob([buf], { type: mimeType || "application/octet-stream" }), filename || "file");
 
   let resp;
   try {
-    const r = await fetch(`https://api.telegram.org/bot${TOKEN}/${method}`, { method: "POST", body: form });
-    resp = await r.json();
+    resp = await sendTgFile(group, isImage ? "sendPhoto" : "sendDocument", isImage ? "photo" : "document", buf, filename, mimeType, caption, task.gmsg);
+    /* Некоторые форматы (webp/heic и т.п.) Telegram принимает как документ,
+       но отклоняет как фото — пробуем ещё раз документом, прежде чем сдаться. */
+    if (isImage && (!resp || !resp.ok)) {
+      resp = await sendTgFile(group, "sendDocument", "document", buf, filename, mimeType, caption, task.gmsg);
+    }
   } catch (e) {
     return { ok: false, error: "Не удалось отправить файл в Telegram" };
   }
-  if (!resp || !resp.ok) return { ok: false, error: "Telegram отклонил файл" };
+  if (!resp || !resp.ok) {
+    await logEvent("crm", "task_file_rejected", { num: task.num, by: actor || "CRM", reason: (resp && resp.description) || "unknown" });
+    return { ok: false, error: "Telegram отклонил файл" + (resp && resp.description ? `: ${resp.description}` : "") };
+  }
 
   const result = resp.result || {};
   let fileEntry = null;
-  if (isImage && Array.isArray(result.photo) && result.photo.length) {
+  if (Array.isArray(result.photo) && result.photo.length) {
     fileEntry = { kind: "photo", file_id: result.photo[result.photo.length - 1].file_id };
   } else if (result.document) {
     fileEntry = { kind: "document", file_id: result.document.file_id };
