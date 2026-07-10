@@ -801,10 +801,19 @@ module.exports = async (req, res) => {
     }
 
     if (req.method === "POST") {
-      if (!isStaff) return res.status(403).json({ ok: false, error: "forbidden" });
       let body = req.body;
       if (typeof body === "string") { try { body = JSON.parse(body); } catch { body = {}; } }
+      const isClient = rolesEnforced && authUser && authUser.role === "client";
+
+      /* task_create / task_update — единственные POST-действия, доступные
+         клиенту: он может создать задачу и отредактировать её текст/срок,
+         но не статус, исполнителя или компанию — это остаётся за
+         бухгалтерами/админом. Всё остальное ниже по-прежнему требует
+         isStaff (или isAdmin для деструктивных действий). */
+      if (!isStaff && !isClient) return res.status(403).json({ ok: false, error: "forbidden" });
+
       if (body && body.action === "status" && body.num && body.status) {
+        if (!isStaff) return res.status(403).json({ ok: false, error: "forbidden" });
         if (!["new", "in_progress", "done"].includes(body.status)) {
           return res.status(200).json({ ok: false, error: "bad status" });
         }
@@ -812,23 +821,43 @@ module.exports = async (req, res) => {
         return res.status(200).json(r);
       }
       if (body && body.action === "client_create") {
+        if (!isStaff) return res.status(403).json({ ok: false, error: "forbidden" });
         const actor = (authUser && authUser.name) || "CRM";
         const r = await upsertClientFromCrm(body, actor);
         return res.status(200).json(r);
       }
       if (body && body.action === "client_update" && body.id) {
+        if (!isStaff) return res.status(403).json({ ok: false, error: "forbidden" });
         const actor = (authUser && authUser.name) || "CRM";
         const r = await patchClient(body.id, body.patch || {}, actor);
         return res.status(200).json(r);
       }
       if (body && body.action === "task_create") {
+        if (!isStaff && !isClient) return res.status(403).json({ ok: false, error: "forbidden" });
         const actor = (authUser && authUser.name) || "CRM";
-        const r = await createTaskFromCrm(body, actor);
+        let payload = body;
+        if (isClient) {
+          const mine = await findClientForCompany(authUser.company);
+          payload = { clientId: mine ? mine.id : null, company: authUser.company, text: body.text, dueDate: body.dueDate };
+        }
+        const r = await createTaskFromCrm(payload, actor);
         return res.status(200).json(r);
       }
       if (body && body.action === "task_update" && body.num) {
+        if (!isStaff && !isClient) return res.status(403).json({ ok: false, error: "forbidden" });
         const actor = (authUser && authUser.name) || "CRM";
-        const r = await patchTask(Number(body.num), body.patch || {}, actor);
+        let patch = body.patch || {};
+        if (isClient) {
+          const task = await redis.get("task:" + Number(body.num));
+          if (!task || normCompany(task.company) !== normCompany(authUser.company || "")) {
+            return res.status(403).json({ ok: false, error: "forbidden" });
+          }
+          const clientPatch = {};
+          if (typeof patch.text === "string") clientPatch.text = patch.text;
+          if (patch.dueDate === null || typeof patch.dueDate === "string") clientPatch.dueDate = patch.dueDate;
+          patch = clientPatch;
+        }
+        const r = await patchTask(Number(body.num), patch, actor);
         return res.status(200).json(r);
       }
       if (body && body.action === "client_delete" && body.id) {
@@ -874,11 +903,13 @@ module.exports = async (req, res) => {
         return res.status(200).json(r);
       }
       if (body && body.action === "calendar_event_create") {
+        if (!isStaff) return res.status(403).json({ ok: false, error: "forbidden" });
         const actor = (authUser && authUser.name) || "CRM";
         const r = await createCalendarEvent(body, actor);
         return res.status(200).json(r);
       }
       if (body && body.action === "calendar_event_update" && body.id) {
+        if (!isStaff) return res.status(403).json({ ok: false, error: "forbidden" });
         const actor = (authUser && authUser.name) || "CRM";
         const r = await patchCalendarEvent(body.id, body.patch || {}, actor);
         return res.status(200).json(r);
