@@ -118,6 +118,27 @@ const tg = (method, payload) =>
     body: JSON.stringify(payload),
   }).then((r) => r.json()).catch(() => null);
 
+/* Когда обычную группу апгрейдят до супергруппы, её chat_id меняется —
+   старый id, сохранённый в redis "group", перестаёт работать, и Telegram
+   отвечает ошибкой "group chat was upgraded to a supergroup chat" с
+   правильным новым id в parameters.migrate_to_chat_id. Раньше эта ошибка
+   просто проглатывалась (try/catch «карточка не критична»), поэтому
+   новые задачи из CRM переставали появляться в группе после апгрейда, а
+   прикрепление файлов падало с этой самой ошибкой. Эта обёртка сама
+   обновляет сохранённый id и повторяет запрос один раз. */
+async function tgToGroup(method, payload) {
+  let group = await redis.get("group");
+  if (!group) return { ok: false, error: "no group" };
+  let resp = await tg(method, { chat_id: Number(group), ...payload });
+  const migrated = resp && !resp.ok && resp.parameters && resp.parameters.migrate_to_chat_id;
+  if (migrated) {
+    group = resp.parameters.migrate_to_chat_id;
+    await redis.set("group", group);
+    resp = await tg(method, { chat_id: Number(group), ...payload });
+  }
+  return resp;
+}
+
 const MSG = {
   ru: {
     assigned: (n, name) => `👩‍💼 По задаче №${n} назначен бухгалтер: ${name}. Уже в работе!`,
@@ -245,8 +266,7 @@ async function findClientForCompany(company) {
 /* Уведомление группы бухгалтеров (без grammY — тот же приём, что и tg() выше) */
 async function notifyGroup(text) {
   try {
-    const group = await redis.get("group");
-    if (group) await tg("sendMessage", { chat_id: Number(group), text });
+    await tgToGroup("sendMessage", { text });
   } catch (e) { /* noop */ }
 }
 
@@ -499,20 +519,19 @@ async function createTaskFromCrm({ clientId, company, text, assignee, dueDate },
 
   /* Карточка в группе бухгалтеров — тот же формат, что и у карточек из бота */
   try {
-    const group = await redis.get("group");
-    if (group) {
-      const header =
-        `🆕 Задача №${num}\n🏢 Компания: ${finalCompany}\n——————————\n` +
-        `${cleanText.slice(0, 3600)}\n\n` +
-        `${STATUS_LINE[task.status] || task.status}` +
-        (task.assignee ? `\n👩‍💼 Исполнитель: ${task.assignee}` : "") +
-        `\n✍️ Заведена из CRM: ${actor || "CRM"}` +
-        (task.status === "new" ? `\n👉 Назначьте исполнителя и статус — в CRM.` : "");
-      const sent = await tg("sendMessage", { chat_id: Number(group), text: header });
-      if (sent && sent.result && sent.result.message_id) {
-        task.gmsg = sent.result.message_id;
-        await redis.set("task:" + num, task);
-      }
+    const header =
+      `🆕 Задача №${num}\n🏢 Компания: ${finalCompany}\n——————————\n` +
+      `${cleanText.slice(0, 3600)}\n\n` +
+      `${STATUS_LINE[task.status] || task.status}` +
+      (task.assignee ? `\n👩‍💼 Исполнитель: ${task.assignee}` : "") +
+      `\n✍️ Заведена из CRM: ${actor || "CRM"}` +
+      (task.status === "new" ? `\n👉 Назначьте исполнителя и статус — в CRM.` : "");
+    const sent = await tgToGroup("sendMessage", { text: header });
+    if (sent && sent.ok && sent.result && sent.result.message_id) {
+      task.gmsg = sent.result.message_id;
+      await redis.set("task:" + num, task);
+    } else if (!sent || !sent.ok) {
+      await logEvent("crm", "group_card_failed", { num, reason: (sent && sent.description) || "unknown" });
     }
   } catch (e) { /* карточка не критична */ }
 
@@ -576,6 +595,19 @@ async function sendTgFile(group, method, field, buf, filename, mimeType, caption
   return r.json();
 }
 
+async function sendTgFileToGroup(method, field, buf, filename, mimeType, caption, replyTo) {
+  let group = await redis.get("group");
+  if (!group) return { ok: false, error: "no group" };
+  let resp = await sendTgFile(group, method, field, buf, filename, mimeType, caption, replyTo);
+  const migrated = resp && !resp.ok && resp.parameters && resp.parameters.migrate_to_chat_id;
+  if (migrated) {
+    group = resp.parameters.migrate_to_chat_id;
+    await redis.set("group", group);
+    resp = await sendTgFile(group, method, field, buf, filename, mimeType, caption, replyTo);
+  }
+  return resp;
+}
+
 async function attachFileToTask(task, buf, filename, mimeType, actor, fromClient) {
   const group = await redis.get("group");
   if (!group) return { ok: false, error: "Группа бухгалтеров не настроена — файл не отправлен" };
@@ -585,11 +617,11 @@ async function attachFileToTask(task, buf, filename, mimeType, actor, fromClient
 
   let resp;
   try {
-    resp = await sendTgFile(group, isImage ? "sendPhoto" : "sendDocument", isImage ? "photo" : "document", buf, filename, mimeType, caption, task.gmsg);
+    resp = await sendTgFileToGroup(isImage ? "sendPhoto" : "sendDocument", isImage ? "photo" : "document", buf, filename, mimeType, caption, task.gmsg);
     /* Некоторые форматы (webp/heic и т.п.) Telegram принимает как документ,
        но отклоняет как фото — пробуем ещё раз документом, прежде чем сдаться. */
     if (isImage && (!resp || !resp.ok)) {
-      resp = await sendTgFile(group, "sendDocument", "document", buf, filename, mimeType, caption, task.gmsg);
+      resp = await sendTgFileToGroup("sendDocument", "document", buf, filename, mimeType, caption, task.gmsg);
     }
   } catch (e) {
     return { ok: false, error: "Не удалось отправить файл в Telegram" };
@@ -765,8 +797,7 @@ async function updateStatus(num, status, assignee) {
 
   /* Обновляем карточку в группе бухгалтеров */
   try {
-    const group = await redis.get("group");
-    if (group && task.gmsg) {
+    if (task.gmsg) {
       const header =
         `🆕 Задача №${num}\n🏢 Компания: ${task.company}\n——————————\n` +
         `${String(task.text).slice(0, 3600)}` +
@@ -774,7 +805,7 @@ async function updateStatus(num, status, assignee) {
         `\n\n${STATUS_LINE[status] || status}` +
         (task.assignee && status !== "new" ? `\n👩‍💼 Исполнитель: ${task.assignee}` : "") +
         (status === "new" ? `\n👉 Назначьте исполнителя и статус — в CRM.` : "");
-      await tg("editMessageText", { chat_id: Number(group), message_id: task.gmsg, text: header });
+      await tgToGroup("editMessageText", { message_id: task.gmsg, text: header });
     }
   } catch (e) { /* карточки может не быть — не критично */ }
 
