@@ -557,7 +557,7 @@ async function patchTask(num, patch, actor) {
    бухгалтеров через Bot API (sendPhoto/sendDocument), а полученный оттуда
    file_id сохраняется в task.files — так вложение остаётся в той же
    Telegram-инфраструктуре, что и файлы, приходящие из бота. */
-async function attachFileToTask(task, buf, filename, mimeType, actor) {
+async function attachFileToTask(task, buf, filename, mimeType, actor, fromClient) {
   const group = await redis.get("group");
   if (!group) return { ok: false, error: "Группа бухгалтеров не настроена — файл не отправлен" };
 
@@ -589,6 +589,17 @@ async function attachFileToTask(task, buf, filename, mimeType, actor) {
     fileEntry = { kind: "document", file_id: result.document.file_id };
   }
   if (!fileEntry) return { ok: false, error: "Не удалось определить загруженный файл" };
+
+  /* Если файл прикрепил бухгалтер/админ (не сам клиент) — пересылаем его
+     клиенту в личку, как и в случае с реплаем на карточку в группе. */
+  if (!fromClient && task.client) {
+    try {
+      const clientCaption = `📎 к задаче №${task.num} (от бухгалтерии)`;
+      const clientMethod = fileEntry.kind === "photo" ? "sendPhoto" : "sendDocument";
+      const clientField = fileEntry.kind === "photo" ? "photo" : "document";
+      await tg(clientMethod, { chat_id: task.client, [clientField]: fileEntry.file_id, caption: clientCaption });
+    } catch (e) { /* доставка клиенту не критична для самого прикрепления */ }
+  }
 
   task.files = Array.isArray(task.files) ? task.files : [];
   task.files.push(fileEntry);
@@ -1007,7 +1018,7 @@ module.exports = async (req, res) => {
           return res.status(200).json({ ok: false, error: "Файл слишком большой (максимум 9 МБ)" });
         }
         const actor = (authUser && authUser.name) || "CRM";
-        const r = await attachFileToTask(task, buf, filename, mimeType, actor);
+        const r = await attachFileToTask(task, buf, filename, mimeType, actor, isClient);
         return res.status(200).json(r);
       }
       if (body && body.action === "client_delete" && body.id) {
