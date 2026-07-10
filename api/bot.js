@@ -823,6 +823,18 @@ bot.on("message", async (ctx) => {
     const task = await redis.get(taskKey(Number(num)));
     if (!task) return;
 
+    /* Бухгалтер прикрепил файл реплаем на карточку задачи — сохраняем его
+       в task.files, чтобы он тоже появился во вложениях в CRM (та же
+       логика, что и для вложений, добавленных через CRM/при создании). */
+    const bfile = extractFile(msg);
+    if (bfile) {
+      task.files = Array.isArray(task.files) ? task.files : [];
+      task.files.push(bfile);
+      task.updatedAt = new Date().toISOString();
+      await redis.set(taskKey(Number(num)), task);
+      await logEvent("telegram", "task_file_attached", { num: task.num, by: "accountant" });
+    }
+
     const clientLang = (await getUser(task.client))?.lang || "ru";
     const label = await bot.api.sendMessage(task.client, T[clientLang].fromAcc(task.num));
     await redis.set(clientRouteKey(task.client, label.message_id), task.num);
@@ -923,6 +935,17 @@ bot.on("message", async (ctx) => {
       const task = await redis.get(taskKey(Number(num)));
       const group = await redis.get("group");
       if (task && group) {
+        /* Клиент прикрепил файл реплаем на свою задачу — сохраняем в
+           task.files, чтобы вложение появилось и в CRM. */
+        const cfile = extractFile(msg);
+        if (cfile) {
+          task.files = Array.isArray(task.files) ? task.files : [];
+          task.files.push(cfile);
+          task.updatedAt = new Date().toISOString();
+          await redis.set(taskKey(Number(num)), task);
+          await logEvent("telegram", "task_file_attached", { num: task.num, by: "client" });
+        }
+
         const opts = task.gmsg ? { reply_to_message_id: task.gmsg } : {};
         const label = await bot.api.sendMessage(
           group,
