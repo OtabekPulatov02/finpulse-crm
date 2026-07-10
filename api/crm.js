@@ -529,6 +529,52 @@ async function patchTask(num, patch, actor) {
   return { ok: true, task: safeTask(task) };
 }
 
+/* Прикрепление файла к задаче из веб-CRM (не из Telegram): у браузера нет
+   Telegram file_id, поэтому реальные байты файла отправляются в группу
+   бухгалтеров через Bot API (sendPhoto/sendDocument), а полученный оттуда
+   file_id сохраняется в task.files — так вложение остаётся в той же
+   Telegram-инфраструктуре, что и файлы, приходящие из бота. */
+async function attachFileToTask(task, buf, filename, mimeType, actor) {
+  const group = await redis.get("group");
+  if (!group) return { ok: false, error: "Группа бухгалтеров не настроена — файл не отправлен" };
+
+  const isImage = /^image\//.test(mimeType || "");
+  const method = isImage ? "sendPhoto" : "sendDocument";
+  const field = isImage ? "photo" : "document";
+  const caption = `📎 к задаче №${task.num} (из CRM, от ${actor || "CRM"})`.slice(0, 1024);
+
+  const form = new FormData();
+  form.append("chat_id", String(group));
+  form.append("caption", caption);
+  if (task.gmsg) form.append("reply_to_message_id", String(task.gmsg));
+  form.append(field, new Blob([buf], { type: mimeType || "application/octet-stream" }), filename || "file");
+
+  let resp;
+  try {
+    const r = await fetch(`https://api.telegram.org/bot${TOKEN}/${method}`, { method: "POST", body: form });
+    resp = await r.json();
+  } catch (e) {
+    return { ok: false, error: "Не удалось отправить файл в Telegram" };
+  }
+  if (!resp || !resp.ok) return { ok: false, error: "Telegram отклонил файл" };
+
+  const result = resp.result || {};
+  let fileEntry = null;
+  if (isImage && Array.isArray(result.photo) && result.photo.length) {
+    fileEntry = { kind: "photo", file_id: result.photo[result.photo.length - 1].file_id };
+  } else if (result.document) {
+    fileEntry = { kind: "document", file_id: result.document.file_id };
+  }
+  if (!fileEntry) return { ok: false, error: "Не удалось определить загруженный файл" };
+
+  task.files = Array.isArray(task.files) ? task.files : [];
+  task.files.push(fileEntry);
+  task.updatedAt = new Date().toISOString();
+  await redis.set("task:" + task.num, task);
+  await logEvent("crm", "task_file_attached", { num: task.num, by: actor || "CRM" });
+  return { ok: true, task: safeTask(task) };
+}
+
 /* --- Календарь напоминаний: задачи со сроком (dueDate), индекс —
    множество "tasks:withdue" (номера задач с непустым dueDate). При
    выполнении задачи (updateStatus → done) убираем её из индекса,
@@ -858,6 +904,24 @@ module.exports = async (req, res) => {
           patch = clientPatch;
         }
         const r = await patchTask(Number(body.num), patch, actor);
+        return res.status(200).json(r);
+      }
+      if (body && body.action === "task_attach_file" && body.num) {
+        if (!isStaff && !isClient) return res.status(403).json({ ok: false, error: "forbidden" });
+        const task = await redis.get("task:" + Number(body.num));
+        if (!task) return res.status(200).json({ ok: false, error: "task not found" });
+        if (isClient && normCompany(task.company) !== normCompany(authUser.company || "")) {
+          return res.status(403).json({ ok: false, error: "forbidden" });
+        }
+        const { filename, mimeType, dataBase64 } = body;
+        if (!dataBase64) return res.status(200).json({ ok: false, error: "file required" });
+        let buf;
+        try { buf = Buffer.from(dataBase64, "base64"); } catch { return res.status(200).json({ ok: false, error: "bad file data" }); }
+        if (buf.length > 9 * 1024 * 1024) {
+          return res.status(200).json({ ok: false, error: "Файл слишком большой (максимум 9 МБ)" });
+        }
+        const actor = (authUser && authUser.name) || "CRM";
+        const r = await attachFileToTask(task, buf, filename, mimeType, actor);
         return res.status(200).json(r);
       }
       if (body && body.action === "client_delete" && body.id) {
