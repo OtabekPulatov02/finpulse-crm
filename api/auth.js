@@ -155,6 +155,26 @@ module.exports = async (req, res) => {
         return res.status(401).json({ ok: false, error: "invalid credentials" });
       }
 
+      if (body.action === "change_password") {
+        const token = getBearer(req);
+        const payload = token && verify(token);
+        if (!payload || payload.role !== "client") {
+          return res.status(401).json({ ok: false, error: "unauthorized" });
+        }
+        const { currentPassword, newPassword } = body;
+        if (!currentPassword || !newPassword || String(newPassword).length < 6) {
+          return res.status(200).json({ ok: false, error: "Пароль должен быть не короче 6 символов" });
+        }
+        const u = await redis.get("user:" + payload.sub);
+        if (!u || !u.pwdHash || !bcrypt.compareSync(String(currentPassword), u.pwdHash)) {
+          return res.status(200).json({ ok: false, error: "Неверный текущий пароль" });
+        }
+        u.pwdHash = bcrypt.hashSync(String(newPassword), 10);
+        u.pwdPlain = String(newPassword); // для показа в /help бота, как и при обычной выдаче
+        await redis.set("user:" + payload.sub, u);
+        return res.status(200).json({ ok: true });
+      }
+
       if (body.action === "guest") {
         const token = sign({ sub: "guest:" + crypto.randomBytes(4).toString("hex"), role: "guest", name: "Гость" }, "1d");
         return res.status(200).json({ ok: true, token, role: "guest", name: "Гость" });
