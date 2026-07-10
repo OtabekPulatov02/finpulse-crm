@@ -101,14 +101,11 @@ async function issueClientPassword(ctx, u) {
       await logEvent("telegram", "phone_conflict", {
         phone, company: u.company, otherTelegramId: String(existingOwnerId), otherCompany: otherUser?.company || null,
       });
-      const group = await redis.get("group");
-      if (group) {
-        try {
-          await bot.api.sendMessage(group,
-            `⚠️ Телефон ${formatPhoneDisplay(phone)} уже привязан к другой карточке в CRM (компания: «${otherUser?.company || "?"}"). ` +
-            `Новая регистрация: «${u.company}». Доступ в кабинет не выдан автоматически — нужна проверка вручную в разделе «Клиенты».`);
-        } catch (e) { /* noop */ }
-      }
+      try {
+        await sendToGroup((gid) => bot.api.sendMessage(gid,
+          `⚠️ Телефон ${formatPhoneDisplay(phone)} уже привязан к другой карточке в CRM (компания: «${otherUser?.company || "?"}"). ` +
+          `Новая регистрация: «${u.company}». Доступ в кабинет не выдан автоматически — нужна проверка вручную в разделе «Клиенты».`));
+      } catch (e) { /* noop */ }
       return null;
     }
     /* тот же клиент, новый Telegram-аккаунт — старый логин по этому телефону перестаёт работать */
@@ -138,13 +135,10 @@ async function upsertClient(u, telegramId) {
 
   if (idByCompany && idByPhone && idByCompany !== idByPhone) {
     await logEvent("telegram", "client_conflict", { company: u.company, phone, idByCompany, idByPhone });
-    const group = await redis.get("group");
-    if (group) {
-      try {
-        await bot.api.sendMessage(group,
-          `⚠️ Похоже на дубликат клиента: «${u.company}» — телефон ${formatPhoneDisplay(phone)} уже привязан к другой карточке. Проверьте вручную в разделе «Клиенты».`);
-      } catch (e) { /* noop */ }
-    }
+    try {
+      await sendToGroup((gid) => bot.api.sendMessage(gid,
+        `⚠️ Похоже на дубликат клиента: «${u.company}» — телефон ${formatPhoneDisplay(phone)} уже привязан к другой карточке. Проверьте вручную в разделе «Клиенты».`));
+    } catch (e) { /* noop */ }
     return idByCompany;
   }
 
@@ -406,18 +400,15 @@ async function notifyNewCompany(u) {
     phone: u.phone || null,
     at: new Date().toISOString(),
   }));
-  const group = await redis.get("group");
-  if (group) {
-    try {
-      await bot.api.sendMessage(
-        group,
-        "🆕 Новый клиент зарегистрировался в боте\n" +
-        "🏢 " + u.company + "\n\n" +
-        "Компании нет в базе CRM — создайте карточку, заполните данные и назначьте ответственного. " +
-        "Телефон клиента — в списке «Ожидают активации»."
-      );
-    } catch (e) { console.error("notify new company:", e); }
-  }
+  try {
+    await sendToGroup((gid) => bot.api.sendMessage(
+      gid,
+      "🆕 Новый клиент зарегистрировался в боте\n" +
+      "🏢 " + u.company + "\n\n" +
+      "Компании нет в базе CRM — создайте карточку, заполните данные и назначьте ответственного. " +
+      "Телефон клиента — в списке «Ожидают активации»."
+    ));
+  } catch (e) { console.error("notify new company:", e); }
 }
 
 async function afterCompanySet(ctx, u) {
@@ -540,6 +531,30 @@ async function sendFileTo(chatId, f, caption) {
   if (f.kind === "audio") return bot.api.sendAudio(chatId, f.file_id, opts);
 }
 
+/* Когда группу апгрейдят до супергруппы, её chat_id меняется — сохранённый
+   в redis "group" старый id перестаёт работать, и Telegram API отвечает
+   ошибкой "group chat was upgraded to a supergroup chat" с правильным
+   новым id в parameters.migrate_to_chat_id. Без этой обёртки такие ошибки
+   либо проглатывались try/catch'ами (карточки задач переставали доходить
+   до группы), либо всплывали как "Telegram отклонил файл". Она сама
+   подхватывает актуальный id, обновляет его в redis при миграции и
+   повторяет запрос один раз. Возвращает null, если группа вообще не
+   привязана (/bind ещё не выполнялся). */
+async function sendToGroup(fn) {
+  const group = await redis.get("group");
+  if (!group) return null;
+  try {
+    return await fn(group);
+  } catch (e) {
+    const newId = e && e.parameters && e.parameters.migrate_to_chat_id;
+    if (newId) {
+      await redis.set("group", newId);
+      return await fn(newId);
+    }
+    throw e;
+  }
+}
+
 /* ---------------- Команды: личный чат ---------------- */
 bot.command("start", async (ctx) => {
   if (!isPrivate(ctx)) return;
@@ -603,6 +618,17 @@ bot.command("password", async (ctx) => {
     return ctx.reply(T[u.lang].crmPending);
   }
   return sendAndPinCreds(ctx, T[u.lang].crmCreds(u.authPhone, password));
+});
+
+/* Telegram сам присылает служебное сообщение с migrate_to_chat_id в СТАРЫЙ
+   чат в момент апгрейда группы до супергруппы — ловим его и сразу
+   обновляем сохранённый id, не дожидаясь первой упавшей отправки. */
+bot.on("message:migrate_to_chat_id", async (ctx) => {
+  const newId = ctx.message.migrate_to_chat_id;
+  const current = await redis.get("group");
+  if (newId && String(current) === String(ctx.chat.id)) {
+    await redis.set("group", newId);
+  }
 });
 
 /* ---------------- Команды: группа ---------------- */
@@ -738,8 +764,6 @@ bot.callbackQuery("submit", async (ctx) => {
   await redis.set(clientRouteKey(ctx.from.id, confirm.message_id), num);
 
   /* Карточка в группу бухгалтеров (без личных данных клиента) */
-  const group = await redis.get("group");
-  if (!group) return;
   try {
     const base = `🆕 Задача №${num}\n🏢 Компания: ${task.company}\n——————————\n`;
     const tail =
@@ -753,7 +777,8 @@ bot.callbackQuery("submit", async (ctx) => {
       rest = body.slice(room);
       body = body.slice(0, room) + "… (продолжение ⬇️)";
     }
-    const gm = await bot.api.sendMessage(group, base + body + tail);
+    const gm = await sendToGroup((gid) => bot.api.sendMessage(gid, base + body + tail));
+    if (!gm) return; // группа не привязана — карточка некуда отправлять
     task.gmsg = gm.message_id;
     await redis.set(taskKey(num), task);
     await redis.set(groupRouteKey(gm.message_id), num);
@@ -761,14 +786,14 @@ bot.callbackQuery("submit", async (ctx) => {
     while (rest.length) {
       const chunk = rest.slice(0, 3900);
       rest = rest.slice(3900);
-      const cm = await bot.api.sendMessage(group, "…" + chunk + (rest.length ? "…" : ""), {
+      const cm = await sendToGroup((gid) => bot.api.sendMessage(gid, "…" + chunk + (rest.length ? "…" : ""), {
         reply_to_message_id: gm.message_id,
-      });
-      await redis.set(groupRouteKey(cm.message_id), num);
+      }));
+      if (cm) await redis.set(groupRouteKey(cm.message_id), num);
     }
 
     for (const f of task.files) {
-      const fm = await sendFileTo(group, f, `📎 к задаче №${num}`);
+      const fm = await sendToGroup((gid) => sendFileTo(gid, f, `📎 к задаче №${num}`));
       if (fm) await redis.set(groupRouteKey(fm.message_id), num);
     }
   } catch (e) {
@@ -933,8 +958,8 @@ bot.on("message", async (ctx) => {
     );
     if (num) {
       const task = await redis.get(taskKey(Number(num)));
-      const group = await redis.get("group");
-      if (task && group) {
+      const groupSet = await redis.get("group");
+      if (task && groupSet) {
         /* Клиент прикрепил файл реплаем на свою задачу — сохраняем в
            task.files, чтобы вложение появилось и в CRM. */
         const cfile = extractFile(msg);
@@ -947,14 +972,14 @@ bot.on("message", async (ctx) => {
         }
 
         const opts = task.gmsg ? { reply_to_message_id: task.gmsg } : {};
-        const label = await bot.api.sendMessage(
-          group,
+        const label = await sendToGroup((gid) => bot.api.sendMessage(
+          gid,
           `💬 Клиент по задаче №${task.num} (${task.company}):`,
           opts
-        );
-        await redis.set(groupRouteKey(label.message_id), task.num);
-        const copied = await bot.api.copyMessage(group, ctx.chat.id, msg.message_id);
-        await redis.set(groupRouteKey(copied.message_id), task.num);
+        ));
+        if (label) await redis.set(groupRouteKey(label.message_id), task.num);
+        const copied = await sendToGroup((gid) => bot.api.copyMessage(gid, ctx.chat.id, msg.message_id));
+        if (copied) await redis.set(groupRouteKey(copied.message_id), task.num);
         return ctx.reply(t.replyRouted(task.num));
       }
     }
