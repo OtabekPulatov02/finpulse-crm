@@ -717,6 +717,9 @@ async function listCalendarEvents() {
 
 const CE_REPEATS = ["once", "monthly", "quarterly", "yearly"];
 const CE_REMIND_OPTIONS = [0, 1, 3, 7];
+/* Компания по умолчанию для напоминаний без конкретного клиента ("Все
+   клиенты") — Task обязательно должна быть привязана к компании. */
+const DEFAULT_REMINDER_COMPANY = "OOO Finpulse";
 
 function addDaysStr(dateStr, n) {
   const [y, m, d] = dateStr.split("-").map(Number);
@@ -761,20 +764,25 @@ async function ensureDueReminderTasks() {
       const due = todayStr >= remindFrom;
       let changed = false;
 
-      if (due && ev.company && ev.taskCreatedFor !== ev.date) {
+      if (due && ev.taskCreatedFor !== ev.date) {
         try {
+          /* Общие напоминания ("Все клиенты", company не задана) раньше
+             вообще не превращались в задачу — у Task обязательно должна
+             быть компания. Теперь заводим их на внутреннюю компанию
+             самой фирмы, чтобы такие дела тоже попадали в канбан. */
+          const evCompany = ev.company || DEFAULT_REMINDER_COMPANY;
           const n = await redis.incr("counter:task");
           const num = 100 + n;
           const label = ev.type === "tax" ? "Налог/отчёт" : "Платёж";
           const task = {
-            num, client: null, company: ev.company,
+            num, client: null, company: evCompany,
             text: `${label}: ${ev.title} (срок ${ev.date})`,
             files: [], status: "new", assignee: null,
             createdAt: new Date().toISOString(), source: "crm",
             dueDate: ev.date, fromCalendarEvent: ev.id,
           };
           try {
-            const clientId = await redis.get("clientcompany:" + normCompany(ev.company));
+            const clientId = await redis.get("clientcompany:" + normCompany(evCompany));
             if (clientId) {
               const cl = await redis.get("client:" + clientId);
               if (cl && cl.telegramId) task.client = cl.telegramId;
@@ -790,7 +798,7 @@ async function ensureDueReminderTasks() {
 
           try {
             const header =
-              `🆕 Задача №${num}\n🏢 Компания: ${ev.company}\n——————————\n` +
+              `🆕 Задача №${num}\n🏢 Компания: ${evCompany}\n——————————\n` +
               `${task.text}\n\n⚪️ Статус: Новая\n👉 Назначьте исполнителя и статус — в CRM.`;
             const sent = await tgToGroup("sendMessage", { text: header });
             if (sent && sent.ok && sent.result && sent.result.message_id) {
@@ -801,7 +809,7 @@ async function ensureDueReminderTasks() {
 
           ev.taskCreatedFor = ev.date;
           changed = true;
-          await logEvent("crm", "task_created_from_reminder", { num, eventId: ev.id, company: ev.company, dueDate: ev.date });
+          await logEvent("crm", "task_created_from_reminder", { num, eventId: ev.id, company: evCompany, dueDate: ev.date });
         } catch (e2) { /* задача не критична для самого напоминания */ }
       }
 
