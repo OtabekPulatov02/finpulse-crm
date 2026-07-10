@@ -702,7 +702,6 @@ function safeCalendarEvent(e) {
     repeat: e.repeat || "once",
     remindDays: typeof e.remindDays === "number" ? e.remindDays : 3,
     active: e.active !== false,
-    status: CE_STATUSES.includes(e.status) ? e.status : "new",
     createdAt: e.createdAt || null,
   };
 }
@@ -718,7 +717,114 @@ async function listCalendarEvents() {
 
 const CE_REPEATS = ["once", "monthly", "quarterly", "yearly"];
 const CE_REMIND_OPTIONS = [0, 1, 3, 7];
-const CE_STATUSES = ["new", "in_progress", "done"];
+
+function addDaysStr(dateStr, n) {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + n);
+  return dt.toISOString().slice(0, 10);
+}
+
+function advanceDateStr(dateStr, repeat) {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  if (repeat === "monthly") dt.setUTCMonth(dt.getUTCMonth() + 1);
+  else if (repeat === "quarterly") dt.setUTCMonth(dt.getUTCMonth() + 3);
+  else if (repeat === "yearly") dt.setUTCFullYear(dt.getUTCFullYear() + 1);
+  else return null;
+  return dt.toISOString().slice(0, 10);
+}
+
+/* "Живой" листенер: вместо того чтобы полностью зависеть от внешнего
+   крона (api/cron/reminders.js всё ещё существует как подстраховка, но
+   раз в сутки/несколько часов — этого мало), при каждом обращении к
+   задачам или календарю из CRM заодно проверяем, не наступило ли окно
+   напоминания у активных событий календаря. Если да — сразу заводим
+   задачу (статус "Новая", без исполнителя) и отправляем карточку в
+   группу, не дожидаясь тика крона. Идемпотентно: ev.taskCreatedFor
+   гарантирует ровно одну задачу на цикл события, сколько бы раз ни
+   сработала проверка. Отдельного "предварительного" сообщения-звоночка
+   больше нет — сама созданная задача (с карточкой в группе) и есть
+   уведомление. */
+async function ensureDueReminderTasks() {
+  try {
+    const ids = (await redis.smembers("calendarevents")) || [];
+    if (!ids.length) return;
+    const keys = ids.map((id) => "calendarevent:" + id);
+    const rows = (await redis.mget(...keys)).filter(Boolean).filter((e) => e.active !== false);
+    if (!rows.length) return;
+
+    const todayStr = tashkentDateStr();
+
+    for (const ev of rows) {
+      const remindFrom = addDaysStr(ev.date, -(ev.remindDays || 0));
+      const due = todayStr >= remindFrom;
+      let changed = false;
+
+      if (due && ev.company && ev.taskCreatedFor !== ev.date) {
+        try {
+          const n = await redis.incr("counter:task");
+          const num = 100 + n;
+          const label = ev.type === "tax" ? "Налог/отчёт" : "Платёж";
+          const task = {
+            num, client: null, company: ev.company,
+            text: `${label}: ${ev.title} (срок ${ev.date})`,
+            files: [], status: "new", assignee: null,
+            createdAt: new Date().toISOString(), source: "crm",
+            dueDate: ev.date, fromCalendarEvent: ev.id,
+          };
+          try {
+            const clientId = await redis.get("clientcompany:" + normCompany(ev.company));
+            if (clientId) {
+              const cl = await redis.get("client:" + clientId);
+              if (cl && cl.telegramId) task.client = cl.telegramId;
+            }
+          } catch (e2) { /* клиента не нашли — задача создаётся без привязки к Telegram-аккаунту */ }
+
+          await redis.set("task:" + num, task);
+          await redis.sadd("tasks:withdue", num);
+          if (task.client) {
+            await redis.lpush("utasks:" + task.client, num);
+            await redis.ltrim("utasks:" + task.client, 0, 19);
+          }
+
+          try {
+            const header =
+              `🆕 Задача №${num}\n🏢 Компания: ${ev.company}\n——————————\n` +
+              `${task.text}\n\n⚪️ Статус: Новая\n👉 Назначьте исполнителя и статус — в CRM.`;
+            const sent = await tgToGroup("sendMessage", { text: header });
+            if (sent && sent.ok && sent.result && sent.result.message_id) {
+              task.gmsg = sent.result.message_id;
+              await redis.set("task:" + num, task);
+            }
+          } catch (e2) { /* карточка не критична для самого создания задачи */ }
+
+          ev.taskCreatedFor = ev.date;
+          changed = true;
+          await logEvent("crm", "task_created_from_reminder", { num, eventId: ev.id, company: ev.company, dueDate: ev.date });
+        } catch (e2) { /* задача не критична для самого напоминания */ }
+      }
+
+      if (todayStr > ev.date) {
+        const next = advanceDateStr(ev.date, ev.repeat);
+        if (next) {
+          ev.date = next;
+          ev.taskCreatedFor = null;
+        } else {
+          ev.active = false;
+        }
+        changed = true;
+      }
+
+      if (changed) {
+        try { await redis.set("calendarevent:" + ev.id, ev); } catch (e2) { /* noop */ }
+      }
+    }
+  } catch (e) {
+    console.error("ensureDueReminderTasks:", e);
+  }
+}
+
 
 async function createCalendarEvent(body, actor) {
   const { type, title, company, date, repeat, remindDays } = body || {};
@@ -732,7 +838,7 @@ async function createCalendarEvent(body, actor) {
     id, type, title: formatSumsInText(String(title).trim()),
     company: company ? String(company).trim() : null,
     date: String(date), repeat: rep, remindDays: rd,
-    active: true, status: "new", lastNotifiedDate: null,
+    active: true, lastNotifiedDate: null,
     createdAt: new Date().toISOString(),
   };
   await redis.set("calendarevent:" + id, ev);
@@ -751,7 +857,6 @@ async function patchCalendarEvent(id, patch, actor) {
   if (p.date !== undefined && /^\d{4}-\d{2}-\d{2}$/.test(String(p.date))) next.date = String(p.date);
   if (p.repeat !== undefined && CE_REPEATS.includes(p.repeat)) next.repeat = p.repeat;
   if (p.remindDays !== undefined && CE_REMIND_OPTIONS.includes(Number(p.remindDays))) next.remindDays = Number(p.remindDays);
-  if (p.status !== undefined && CE_STATUSES.includes(p.status)) next.status = p.status;
   if (p.active !== undefined) next.active = !!p.active;
   next.updatedAt = new Date().toISOString();
   await redis.set("calendarevent:" + id, next);
@@ -858,6 +963,7 @@ module.exports = async (req, res) => {
         if (rolesEnforced && authUser.role === "guest") {
           return res.status(200).json({ ok: true, tasks: DEMO_TASKS, demo: true });
         }
+        await ensureDueReminderTasks();
         let tasks = await listTasks();
         if (rolesEnforced && authUser.role === "client") {
           tasks = tasks.filter((t) => t.company === authUser.company);
@@ -967,6 +1073,7 @@ module.exports = async (req, res) => {
         if (rolesEnforced && authUser.role === "guest") {
           return res.status(200).json({ ok: true, events: [], demo: true });
         }
+        await ensureDueReminderTasks();
         let events = (await listCalendarEvents()).map(safeCalendarEvent);
         if (rolesEnforced && authUser.role === "client") {
           events = events.filter((e) => !e.company || normCompany(e.company) === normCompany(authUser.company || ""));
