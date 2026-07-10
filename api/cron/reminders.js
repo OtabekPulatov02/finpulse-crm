@@ -43,6 +43,32 @@ const tg = (method, payload) =>
     body: JSON.stringify(payload),
   }).then((r) => r.json()).catch(() => null);
 
+/* Как и в api/crm.js / api/bot.js: после апгрейда группы до супергруппы
+   старый chat_id перестаёт работать — эта обёртка сама подхватывает
+   parameters.migrate_to_chat_id из ответа, обновляет сохранённый id и
+   повторяет запрос один раз. */
+async function tgToGroup(method, payload) {
+  let group = await redis.get("group");
+  if (!group) return { ok: false, error: "no group" };
+  let resp = await tg(method, { chat_id: Number(group), ...payload });
+  const migrated = resp && !resp.ok && resp.parameters && resp.parameters.migrate_to_chat_id;
+  if (migrated) {
+    group = resp.parameters.migrate_to_chat_id;
+    await redis.set("group", group);
+    resp = await tg(method, { chat_id: Number(group), ...payload });
+  }
+  return resp;
+}
+
+function normCompany(str) {
+  return String(str || "")
+    .toLowerCase()
+    .replace(/[«»"'‘’“”.,:;()\-\u2013\u2014_/\\]/g, " ")
+    .replace(/\b(ооо|оао|зао|ао|ип|чп|мчж|хк|ooo|oao|llc|ltd|inc|mchj|xk|xt)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function escapeHtml(s) {
   return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
@@ -140,21 +166,18 @@ async function processTaskReminders(todayStr) {
 
 async function processCalendarEvents(todayStr) {
   const ids = (await redis.smembers("calendarevents")) || [];
-  if (!ids.length) return { checked: 0, notified: 0, advanced: 0, deactivated: 0 };
+  if (!ids.length) return { checked: 0, notified: 0, advanced: 0, deactivated: 0, tasksCreated: 0 };
 
   const keys = ids.map((id) => "calendarevent:" + id);
   const rows = (await redis.mget(...keys)).filter(Boolean).filter((e) => e.active !== false);
 
-  let group = null;
-  try { group = await redis.get("group"); } catch (e) { /* noop */ }
-
-  let notified = 0, advanced = 0, deactivated = 0;
+  let notified = 0, advanced = 0, deactivated = 0, tasksCreated = 0;
 
   for (const ev of rows) {
     const remindFrom = addDays(ev.date, -(ev.remindDays || 0));
     const shouldNotify = todayStr >= remindFrom && ev.lastNotifiedDate !== todayStr;
 
-    if (shouldNotify && group) {
+    if (shouldNotify) {
       try {
         const label = ev.type === "tax" ? "Налог/отчёт" : "Платёж";
         const companyLabel = ev.company || "Все клиенты";
@@ -165,10 +188,66 @@ async function processCalendarEvents(todayStr) {
           `Название: ${escapeHtml(ev.title)}\n` +
           `Компания: ${escapeHtml(companyLabel)}\n` +
           `Срок: ${ev.date}${tag}`;
-        await tg("sendMessage", { chat_id: Number(group), text, parse_mode: "HTML" });
+        await tgToGroup("sendMessage", { text, parse_mode: "HTML" });
         ev.lastNotifiedDate = todayStr;
         notified++;
       } catch (e) { /* noop */ }
+    }
+
+    /* Как только наступает окно напоминания, заводим настоящую задачу в
+       CRM (статус "Новая", без исполнителя) — раньше событие календаря
+       только слало сообщение в Telegram и никак не попадало в раздел
+       "Задачи". ev.taskCreatedFor хранит дату цикла, для которой задача
+       уже создана — без этого при многодневном окне (remindDays > 0)
+       получили бы по дубликату задачи на каждый день до срока. Общие
+       напоминания без company ("Все клиенты") в задачу не превращаем —
+       у задачи обязательно должна быть компания. */
+    if (shouldNotify && ev.company && ev.taskCreatedFor !== ev.date) {
+      try {
+        const n = await redis.incr("counter:task");
+        const num = 100 + n;
+        const label = ev.type === "tax" ? "Налог/отчёт" : "Платёж";
+        const task = {
+          num,
+          client: null,
+          company: ev.company,
+          text: `${label}: ${ev.title} (срок ${ev.date})`,
+          files: [],
+          status: "new",
+          assignee: null,
+          createdAt: new Date().toISOString(),
+          source: "crm",
+          dueDate: ev.date,
+          fromCalendarEvent: ev.id,
+        };
+        try {
+          const clientId = await redis.get("clientcompany:" + normCompany(ev.company));
+          if (clientId) {
+            const cl = await redis.get("client:" + clientId);
+            if (cl && cl.telegramId) task.client = cl.telegramId;
+          }
+        } catch (e) { /* клиента не нашли — задача всё равно создаётся, просто без привязки к Telegram-аккаунту */ }
+
+        await redis.set("task:" + num, task);
+        await redis.sadd("tasks:withdue", num);
+        if (task.client) {
+          await redis.lpush("utasks:" + task.client, num);
+          await redis.ltrim("utasks:" + task.client, 0, 19);
+        }
+
+        const header =
+          `🆕 Задача №${num}\n🏢 Компания: ${escapeHtml(ev.company)}\n——————————\n` +
+          `${escapeHtml(task.text)}\n\n⚪️ Статус: Новая\n👉 Назначьте исполнителя и статус — в CRM.`;
+        const sent = await tgToGroup("sendMessage", { text: header });
+        if (sent && sent.ok && sent.result && sent.result.message_id) {
+          task.gmsg = sent.result.message_id;
+          await redis.set("task:" + num, task);
+        }
+
+        ev.taskCreatedFor = ev.date;
+        tasksCreated++;
+        await logEvent("cron", "task_created_from_reminder", { num, eventId: ev.id, company: ev.company, dueDate: ev.date });
+      } catch (e) { /* задача не критична для самого напоминания */ }
     }
 
     if (todayStr > ev.date) {
@@ -176,6 +255,7 @@ async function processCalendarEvents(todayStr) {
       if (next) {
         ev.date = next;
         ev.lastNotifiedDate = null;
+        ev.taskCreatedFor = null; // новый цикл повторения — задачу можно будет завести заново
         advanced++;
       } else {
         ev.active = false;
@@ -186,7 +266,7 @@ async function processCalendarEvents(todayStr) {
     try { await redis.set("calendarevent:" + ev.id, ev); } catch (e) { /* noop */ }
   }
 
-  return { checked: rows.length, notified, advanced, deactivated };
+  return { checked: rows.length, notified, advanced, deactivated, tasksCreated };
 }
 
 module.exports = async (req, res) => {
