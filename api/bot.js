@@ -20,6 +20,15 @@ const redis = new Redis({
   token: process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN,
 });
 
+/* Расставляет пробелы-разделители тысяч в суммах внутри произвольного
+   текста ("1000000" -> "1 000 000") — в тексте задач и т.п. Идемпотентно,
+   поэтому применяется прямо при сохранении, а не в каждом месте показа. */
+function formatSumsInText(text) {
+  return String(text ?? "").replace(/(?<![+№\d])\d{6,12}(?!\d)/g, (m) =>
+    m.replace(/\B(?=(\d{3})+(?!\d))/g, " ")
+  );
+}
+
 /* ---------------- Доступ клиента в CRM (логин = телефон) ---------------- */
 function normPhone(p) {
   return String(p || "").replace(/[^\d+]/g, "");
@@ -682,7 +691,7 @@ bot.callbackQuery("submit", async (ctx) => {
     num,
     client: ctx.from.id,
     company: u.company,
-    text: u.draft.text,
+    text: formatSumsInText(u.draft.text),
     files: u.draft.files || [],
     status: "new",
     assignee: null,

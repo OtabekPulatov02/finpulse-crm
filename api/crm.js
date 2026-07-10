@@ -52,6 +52,17 @@ const redis = new Redis({
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 
+/* Расставляет пробелы-разделители тысяч в суммах внутри произвольного
+   текста ("1000000" -> "1 000 000") — в названиях/описаниях задач,
+   заголовках напоминаний и т.п. Идемпотентно (повторный вызов на уже
+   отформатированной строке ничего не меняет), поэтому применяется прямо
+   при сохранении текста, а не отдельно в каждом месте отображения. */
+function formatSumsInText(text) {
+  return String(text ?? "").replace(/(?<![+№\d])\d{6,12}(?!\d)/g, (m) =>
+    m.replace(/\B(?=(\d{3})+(?!\d))/g, " ")
+  );
+}
+
 /* --- Доступ ---------------------------------------------------------
    Временная защита (до полноценных JWT-сессий из ролевой системы):
    - CRM_API_KEY: общий секрет, который CRM-фронт шлёт в заголовке x-api-key
@@ -442,7 +453,7 @@ async function listTasks() {
 }
 
 async function createTaskFromCrm({ clientId, company, text, assignee, dueDate }, actor) {
-  const cleanText = String(text || "").trim();
+  const cleanText = formatSumsInText(String(text || "").trim());
   if (!cleanText) return { ok: false, error: "text required" };
   const cleanDue = /^\d{4}-\d{2}-\d{2}$/.test(String(dueDate || "")) ? dueDate : null;
 
@@ -516,7 +527,9 @@ async function patchTask(num, patch, actor) {
   if (!task) return { ok: false, error: "task not found" };
   const allowed = ["text", "assignee", "company"];
   for (const k of allowed) {
-    if (Object.prototype.hasOwnProperty.call(patch || {}, k)) task[k] = patch[k];
+    if (Object.prototype.hasOwnProperty.call(patch || {}, k)) {
+      task[k] = k === "text" ? formatSumsInText(patch[k]) : patch[k];
+    }
   }
   if (Object.prototype.hasOwnProperty.call(patch || {}, "dueDate")) {
     const raw = patch.dueDate;
@@ -647,7 +660,7 @@ async function createCalendarEvent(body, actor) {
   const rd = CE_REMIND_OPTIONS.includes(Number(remindDays)) ? Number(remindDays) : 3;
   const id = "ce" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   const ev = {
-    id, type, title: String(title).trim(),
+    id, type, title: formatSumsInText(String(title).trim()),
     company: company ? String(company).trim() : null,
     date: String(date), repeat: rep, remindDays: rd,
     active: true, lastNotifiedDate: null,
@@ -664,7 +677,7 @@ async function patchCalendarEvent(id, patch, actor) {
   if (!existing) return { ok: false, error: "not found" };
   const next = { ...existing };
   const p = patch || {};
-  if (p.title !== undefined && String(p.title).trim()) next.title = String(p.title).trim();
+  if (p.title !== undefined && String(p.title).trim()) next.title = formatSumsInText(String(p.title).trim());
   if (p.company !== undefined) next.company = p.company ? String(p.company).trim() : null;
   if (p.date !== undefined && /^\d{4}-\d{2}-\d{2}$/.test(String(p.date))) next.date = String(p.date);
   if (p.repeat !== undefined && CE_REPEATS.includes(p.repeat)) next.repeat = p.repeat;
