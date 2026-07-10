@@ -24,6 +24,16 @@ const redis = new Redis({
 function normPhone(p) {
   return String(p || "").replace(/[^\d+]/g, "");
 }
+/* Форматирование номера для отображения человеку (в сообщениях бота) —
+   "+998935678654" → "+998 93 567 86 54". Хранение/сравнение по-прежнему
+   идёт через normPhone(), формат тут только для читаемости. */
+function formatPhoneDisplay(p) {
+  const digits = String(p || "").replace(/\D/g, "");
+  if (digits.length === 12 && digits.startsWith("998")) {
+    return `+${digits.slice(0, 3)} ${digits.slice(3, 5)} ${digits.slice(5, 8)} ${digits.slice(8, 10)} ${digits.slice(10, 12)}`;
+  }
+  return String(p || "");
+}
 function genPassword() {
   // 8 читаемых символов без похожих друг на друга (0/O, 1/l/I)
   const alphabet = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
@@ -50,7 +60,7 @@ function crmAccessBlock(u) {
   const lang = u.lang || "ru";
   const L = CRM_BLOCK_LABEL[lang] || CRM_BLOCK_LABEL.ru;
   const passLine = u.pwdPlain ? `<code>${escapeHtml(u.pwdPlain)}</code>` : L.regen;
-  return `\n\n${L.title}\n${L.site}: ${process.env.CRM_APP_URL || "https://finpulse-crm-app.vercel.app"}\n${L.login}: <code>${escapeHtml(u.authPhone)}</code>\n${L.pass}: ${passLine}`;
+  return `\n\n${L.title}\n${L.site}: ${process.env.CRM_APP_URL || "https://finpulse-crm-app.vercel.app"}\n${L.login}: <code>${escapeHtml(formatPhoneDisplay(u.authPhone))}</code>\n${L.pass}: ${passLine}`;
 }
 
 /* Отправляет сообщение с доступами как HTML (кликабельные code-блоки для
@@ -86,7 +96,7 @@ async function issueClientPassword(ctx, u) {
       if (group) {
         try {
           await bot.api.sendMessage(group,
-            `⚠️ Телефон ${phone} уже привязан к другой карточке в CRM (компания: «${otherUser?.company || "?"}"). ` +
+            `⚠️ Телефон ${formatPhoneDisplay(phone)} уже привязан к другой карточке в CRM (компания: «${otherUser?.company || "?"}"). ` +
             `Новая регистрация: «${u.company}». Доступ в кабинет не выдан автоматически — нужна проверка вручную в разделе «Клиенты».`);
         } catch (e) { /* noop */ }
       }
@@ -123,7 +133,7 @@ async function upsertClient(u, telegramId) {
     if (group) {
       try {
         await bot.api.sendMessage(group,
-          `⚠️ Похоже на дубликат клиента: «${u.company}» — телефон ${phone} уже привязан к другой карточке. Проверьте вручную в разделе «Клиенты».`);
+          `⚠️ Похоже на дубликат клиента: «${u.company}» — телефон ${formatPhoneDisplay(phone)} уже привязан к другой карточке. Проверьте вручную в разделе «Клиенты».`);
       } catch (e) { /* noop */ }
     }
     return idByCompany;
@@ -202,7 +212,7 @@ const T = {
     btnYes: "✅ Да, верно",
     btnNo: "✍️ Нет, другая",
     crmCreds: (login, pass) =>
-      `🔐 <b>Доступ в личный кабинет CRM</b>\n\nСайт:\n${process.env.CRM_APP_URL || "https://finpulse-crm-app.vercel.app"}\n\nЛогин (телефон):\n<code>${escapeHtml(login)}</code>\n\nПароль:\n<code>${escapeHtml(pass)}</code>\n\nНажмите на логин или пароль, чтобы скопировать. Этот же доступ всегда можно посмотреть командой /help. Сменить пароль — командой /password.`,
+      `🔐 <b>Доступ в личный кабинет CRM</b>\n\nСайт:\n${process.env.CRM_APP_URL || "https://finpulse-crm-app.vercel.app"}\n\nЛогин (телефон):\n<code>${escapeHtml(formatPhoneDisplay(login))}</code>\n\nПароль:\n<code>${escapeHtml(pass)}</code>\n\nНажмите на логин или пароль, чтобы скопировать. Этот же доступ всегда можно посмотреть командой /help. Сменить пароль — командой /password.`,
     crmPending: "🔐 Этот телефон уже привязан к другой карточке клиента в CRM. Доступ в кабинет выдадим после проверки бухгалтером.",
   },
   uz: {
@@ -239,7 +249,7 @@ const T = {
     btnYes: "✅ Ha, to'g'ri",
     btnNo: "✍️ Yo'q, boshqa",
     crmCreds: (login, pass) =>
-      `🔐 <b>CRM shaxsiy kabinetiga kirish</b>\n\nSayt:\n${process.env.CRM_APP_URL || "https://finpulse-crm-app.vercel.app"}\n\nLogin (telefon):\n<code>${escapeHtml(login)}</code>\n\nParol:\n<code>${escapeHtml(pass)}</code>\n\nNusxalash uchun login yoki parolga bosing. Bu ma'lumotni /help buyrug'i orqali doim ko'rish mumkin. Parolni o'zgartirish — /password.`,
+      `🔐 <b>CRM shaxsiy kabinetiga kirish</b>\n\nSayt:\n${process.env.CRM_APP_URL || "https://finpulse-crm-app.vercel.app"}\n\nLogin (telefon):\n<code>${escapeHtml(formatPhoneDisplay(login))}</code>\n\nParol:\n<code>${escapeHtml(pass)}</code>\n\nNusxalash uchun login yoki parolga bosing. Bu ma'lumotni /help buyrug'i orqali doim ko'rish mumkin. Parolni o'zgartirish — /password.`,
     crmPending: "🔐 Bu telefon raqami CRM'da boshqa mijoz kartasiga biriktirilgan. Kabinetga kirish buxgalter tekshiruvidan so'ng beriladi.",
   },
   en: {
@@ -276,7 +286,7 @@ const T = {
     btnYes: "✅ Yes, correct",
     btnNo: "✍️ No, different",
     crmCreds: (login, pass) =>
-      `🔐 <b>CRM portal access</b>\n\nSite:\n${process.env.CRM_APP_URL || "https://finpulse-crm-app.vercel.app"}\n\nLogin (phone):\n<code>${escapeHtml(login)}</code>\n\nPassword:\n<code>${escapeHtml(pass)}</code>\n\nTap the login or password to copy it. You can always view this again via /help. To change the password, send /password.`,
+      `🔐 <b>CRM portal access</b>\n\nSite:\n${process.env.CRM_APP_URL || "https://finpulse-crm-app.vercel.app"}\n\nLogin (phone):\n<code>${escapeHtml(formatPhoneDisplay(login))}</code>\n\nPassword:\n<code>${escapeHtml(pass)}</code>\n\nTap the login or password to copy it. You can always view this again via /help. To change the password, send /password.`,
     crmPending: "🔐 This phone number is already linked to another client record in the CRM. Portal access will be granted after an accountant reviews it.",
   },
 };
