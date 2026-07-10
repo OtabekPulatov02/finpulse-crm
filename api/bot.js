@@ -486,6 +486,7 @@ async function listTasks(ctx, u) {
   const block = (task) =>
     (STATUS_EMOJI[task.status] || "⚪️") + " №" + task.num +
     (task.assignee ? " · 👩‍💼 " + task.assignee : "") +
+    (task.files && task.files.length ? " · 📎" + task.files.length : "") +
     "\n" + (task.text || "");
 
   const parts = [];
@@ -500,11 +501,18 @@ async function listTasks(ctx, u) {
     parts.push(t.reuseHint);
   }
 
+  const withFiles = [...active, ...history].filter((x) => x.files && x.files.length).slice(0, 6);
+
   let opts = { reply_markup: mainKb(u.lang) };
-  if (history.length) {
+  if (history.length || withFiles.length) {
     const kb = new InlineKeyboard();
     history.slice(0, 5).forEach((task, i) => {
       kb.text("🔁 №" + task.num, "reuse:" + task.num);
+      if (i % 3 === 2) kb.row();
+    });
+    if (history.length % 3 !== 0) kb.row();
+    withFiles.forEach((task, i) => {
+      kb.text("📎 №" + task.num, "files:" + task.num);
       if (i % 3 === 2) kb.row();
     });
     opts = { reply_markup: kb };
@@ -628,6 +636,17 @@ bot.callbackQuery(/^lang:(ru|uz|en)$/, async (ctx) => {
 });
 
 /* ---------------- Повтор задачи из истории ---------------- */
+bot.callbackQuery(/^files:(\d+)$/, async (ctx) => {
+  const u = await getUser(ctx.from.id);
+  const task = await redis.get(taskKey(Number(ctx.match[1])));
+  if (!task || task.client !== ctx.from.id) return ctx.answerCallbackQuery("✖️");
+  if (!task.files || !task.files.length) return ctx.answerCallbackQuery();
+  await ctx.answerCallbackQuery("📎");
+  for (const f of task.files) {
+    await sendFileTo(ctx.from.id, f, `📎 к задаче №${task.num}`);
+  }
+});
+
 bot.callbackQuery(/^reuse:(\d+)$/, async (ctx) => {
   const u = await getUser(ctx.from.id);
   if (!u || !u.lang) return ctx.answerCallbackQuery();

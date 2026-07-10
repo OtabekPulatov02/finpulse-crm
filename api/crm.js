@@ -104,9 +104,12 @@ function getAuthUser(req) {
 }
 
 const DEMO_TASKS = [
-  { num: 9001, company: "Демо ООО «Пример»", text: "Подготовить отчёт по НДС", status: "in_progress", assignee: "Демо-бухгалтер", createdAt: new Date().toISOString(), files: 1 },
-  { num: 9002, company: "Демо ООО «Пример»", text: "Свериться с поставщиком", status: "new", assignee: null, createdAt: new Date().toISOString(), files: 0 },
-  { num: 9003, company: "Демо ООО «Пример»", text: "Начислить зарплату за месяц", status: "done", assignee: "Демо-бухгалтер", createdAt: new Date().toISOString(), files: 2 },
+  { num: 9001, company: "Демо ООО «Пример»", text: "Подготовить отчёт по НДС", status: "in_progress", assignee: "Демо-бухгалтер", createdAt: new Date().toISOString(), files: 1, attachments: [{ index: 0, kind: "document" }] },
+  { num: 9002, company: "Демо ООО «Пример»", text: "Свериться с поставщиком", status: "new", assignee: null, createdAt: new Date().toISOString(), files: 0, attachments: [] },
+  { num: 9003, company: "Демо ООО «Пример»", text: "Начислить зарплату за месяц", status: "done", assignee: "Демо-бухгалтер", createdAt: new Date().toISOString(), files: 2, attachments: [{ index: 0, kind: "document" }, { index: 1, kind: "photo" }] },
+];
+const DEMO_EMPLOYEES = [
+  { id: "demo-emp-1", name: "Демо-бухгалтер", phone: null, login: "demo", role: "accountant", active: true, createdAt: new Date().toISOString() },
 ];
 const tg = (method, payload) =>
   fetch(`https://api.telegram.org/bot${TOKEN}/${method}`, {
@@ -160,6 +163,9 @@ function safeTask(t) {
     assignee: t.assignee || null,
     createdAt: t.createdAt || null,
     files: Array.isArray(t.files) ? t.files.length : 0,
+    /* Метаданные вложений (без file_id — он остаётся на сервере, чтобы не
+       светить его в браузере; сами байты отдаются через r=task_file). */
+    attachments: Array.isArray(t.files) ? t.files.map((f, i) => ({ index: i, kind: f.kind || "document" })) : [],
     dueDate: t.dueDate || null,
     source: t.source === "crm" ? "crm" : "bot",
     doneAt: t.doneAt || null,
@@ -845,10 +851,54 @@ module.exports = async (req, res) => {
         return res.status(200).json({ ok: true, calendar });
       }
       if (q.r === "employees") {
+        if (rolesEnforced && authUser.role === "guest") {
+          return res.status(200).json({ ok: true, employees: DEMO_EMPLOYEES, demo: true });
+        }
         const isAdmin = !rolesEnforced || (authUser && authUser.role === "admin");
         if (!isAdmin) return res.status(403).json({ ok: false, error: "forbidden" });
         const employees = (await listEmployees()).map(safeEmployee);
         return res.status(200).json({ ok: true, employees });
+      }
+      if (q.r === "task_file") {
+        if (rolesEnforced && authUser.role === "guest") {
+          return res.status(403).json({ ok: false, error: "forbidden" });
+        }
+        if (!q.num || q.i === undefined) {
+          return res.status(200).json({ ok: false, error: "num and i required" });
+        }
+        const task = await redis.get("task:" + Number(q.num));
+        if (!task) return res.status(404).json({ ok: false, error: "not found" });
+        if (rolesEnforced && authUser.role === "client" && normCompany(task.company) !== normCompany(authUser.company || "")) {
+          return res.status(403).json({ ok: false, error: "forbidden" });
+        }
+        if (rolesEnforced && !isStaff && authUser.role !== "client") {
+          return res.status(403).json({ ok: false, error: "forbidden" });
+        }
+        const f = Array.isArray(task.files) ? task.files[Number(q.i)] : null;
+        if (!f) return res.status(404).json({ ok: false, error: "file not found" });
+        try {
+          const metaResp = await fetch(`https://api.telegram.org/bot${TOKEN}/getFile?file_id=${encodeURIComponent(f.file_id)}`);
+          const meta = await metaResp.json();
+          if (!meta.ok) return res.status(502).json({ ok: false, error: "telegram file error" });
+          const filePath = meta.result.file_path || "";
+          const fileResp = await fetch(`https://api.telegram.org/file/bot${TOKEN}/${filePath}`);
+          if (!fileResp.ok) return res.status(502).json({ ok: false, error: "telegram download error" });
+          const buf = Buffer.from(await fileResp.arrayBuffer());
+          const ext = (filePath.split(".").pop() || "bin").toLowerCase();
+          const MIME = {
+            jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", webp: "image/webp",
+            pdf: "application/pdf", doc: "application/msword",
+            docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            xls: "application/vnd.ms-excel",
+            xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            mp4: "video/mp4", ogg: "audio/ogg", oga: "audio/ogg", mp3: "audio/mpeg",
+          };
+          res.setHeader("Content-Type", MIME[ext] || "application/octet-stream");
+          res.setHeader("Content-Disposition", `inline; filename="task-${q.num}-${q.i}.${ext}"`);
+          return res.status(200).send(buf);
+        } catch (e) {
+          return res.status(502).json({ ok: false, error: "failed to fetch file" });
+        }
       }
       if (q.r === "calendar_events") {
         if (rolesEnforced && authUser.role === "guest") {
@@ -867,13 +917,18 @@ module.exports = async (req, res) => {
       let body = req.body;
       if (typeof body === "string") { try { body = JSON.parse(body); } catch { body = {}; } }
       const isClient = rolesEnforced && authUser && authUser.role === "client";
+      /* Гость (демо-доступ) может "создать задачу"/"прикрепить файл", чтобы
+         попробовать интерфейс, но ничего не пишется в реальную БД — это
+         имитация, ответ строится на лету (см. ветки task_create/
+         task_attach_file ниже). */
+      const isGuest = rolesEnforced && authUser && authUser.role === "guest";
 
       /* task_create / task_update — единственные POST-действия, доступные
          клиенту: он может создать задачу и отредактировать её текст/срок,
          но не статус, исполнителя или компанию — это остаётся за
          бухгалтерами/админом. Всё остальное ниже по-прежнему требует
          isStaff (или isAdmin для деструктивных действий). */
-      if (!isStaff && !isClient) return res.status(403).json({ ok: false, error: "forbidden" });
+      if (!isStaff && !isClient && !isGuest) return res.status(403).json({ ok: false, error: "forbidden" });
 
       if (body && body.action === "status" && body.num && body.status) {
         if (!isStaff) return res.status(403).json({ ok: false, error: "forbidden" });
@@ -896,7 +951,18 @@ module.exports = async (req, res) => {
         return res.status(200).json(r);
       }
       if (body && body.action === "task_create") {
-        if (!isStaff && !isClient) return res.status(403).json({ ok: false, error: "forbidden" });
+        if (!isStaff && !isClient && !isGuest) return res.status(403).json({ ok: false, error: "forbidden" });
+        if (isGuest) {
+          const cleanText = formatSumsInText(String(body.text || "").trim());
+          if (!cleanText) return res.status(200).json({ ok: false, error: "text required" });
+          const fakeTask = {
+            num: 9000 + Math.floor(Math.random() * 900),
+            company: "Демо ООО «Пример»", text: cleanText, status: "new", assignee: null,
+            createdAt: new Date().toISOString(), files: [], dueDate: /^\d{4}-\d{2}-\d{2}$/.test(String(body.dueDate || "")) ? body.dueDate : null,
+            source: "crm",
+          };
+          return res.status(200).json({ ok: true, task: safeTask(fakeTask), demo: true });
+        }
         const actor = (authUser && authUser.name) || "CRM";
         let payload = body;
         if (isClient) {
@@ -924,7 +990,10 @@ module.exports = async (req, res) => {
         return res.status(200).json(r);
       }
       if (body && body.action === "task_attach_file" && body.num) {
-        if (!isStaff && !isClient) return res.status(403).json({ ok: false, error: "forbidden" });
+        if (!isStaff && !isClient && !isGuest) return res.status(403).json({ ok: false, error: "forbidden" });
+        if (isGuest) {
+          return res.status(200).json({ ok: true, demo: true });
+        }
         const task = await redis.get("task:" + Number(body.num));
         if (!task) return res.status(200).json({ ok: false, error: "task not found" });
         if (isClient && normCompany(task.company) !== normCompany(authUser.company || "")) {
