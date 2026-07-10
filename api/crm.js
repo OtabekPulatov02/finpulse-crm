@@ -188,6 +188,10 @@ function safeClient(c) {
     assignedTo: c.assignedTo || null,
     tariff: c.tariff || null,
     note: c.note || null,
+    inn: c.inn || null,
+    mfo: c.mfo || null,
+    bankAccount: c.bankAccount || null,
+    address: c.address || null,
     createdAt: c.createdAt || null,
     updatedAt: c.updatedAt || null,
   };
@@ -298,7 +302,7 @@ async function upsertClientFromCrm({ company, phone, position, tariff, assignedT
 async function patchClient(id, patch, actor) {
   const existing = await redis.get("client:" + id);
   if (!existing) return { ok: false, error: "client not found" };
-  const allowed = ["status", "assignedTo", "tariff", "note", "position"];
+  const allowed = ["status", "assignedTo", "tariff", "note", "position", "inn", "mfo", "bankAccount", "address"];
   const next = { ...existing };
   for (const k of allowed) {
     if (Object.prototype.hasOwnProperty.call(patch || {}, k)) next[k] = patch[k];
