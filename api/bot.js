@@ -188,7 +188,7 @@ const T = {
     help:
       "ℹ️ Как это работает:\n\n1️⃣ Напишите задачу текстом (можно с файлами)\n2️⃣ Нажмите «Отправить задачу»\n3️⃣ Бухгалтер получит её и ответит здесь\n\nКоманды:\n/new — новая задача\n/tasks — мои задачи\n/company — изменить компанию\n/lang — сменить язык\n/help — помощь",
     langSaved: "Язык сохранён 🇷🇺",
-    menu: { newTask: "➕ Новая задача", myTasks: "📂 История", repeat: "🔁 Повторить", help: "❓ Помощь" },
+    menu: { newTask: "📝 Новая задача", myTasks: "📋 Мои задачи", lang: "🌐 Язык", help: "ℹ️ Помощь" },
     activeTitle: "🔥 Актуальные:",
     historyTitle: "🗂 История:",
     reuseHint: "Нажмите 🔁 чтобы повторить задачу из истории.",
@@ -225,7 +225,7 @@ const T = {
     help:
       "ℹ️ Qanday ishlaydi:\n\n1️⃣ Vazifani matn bilan yozing (fayllar bilan ham bo'ladi)\n2️⃣ «Vazifani yuborish» tugmasini bosing\n3️⃣ Buxgalter uni oladi va shu yerda javob beradi\n\nBuyruqlar:\n/new — yangi vazifa\n/tasks — vazifalarim\n/company — kompaniyani o'zgartirish\n/lang — tilni o'zgartirish\n/help — yordam",
     langSaved: "Til saqlandi 🇺🇿",
-    menu: { newTask: "➕ Yangi vazifa", myTasks: "📂 Tarix", repeat: "🔁 Takrorlash", help: "❓ Yordam" },
+    menu: { newTask: "📝 Yangi vazifa", myTasks: "📋 Vazifalarim", lang: "🌐 Til", help: "ℹ️ Yordam" },
     activeTitle: "🔥 Joriy:",
     historyTitle: "🗂 Tarix:",
     reuseHint: "Tarixdagi vazifani takrorlash uchun 🔁 bosing.",
@@ -262,7 +262,7 @@ const T = {
     help:
       "ℹ️ How it works:\n\n1️⃣ Write your task as text (files welcome)\n2️⃣ Tap “Submit task”\n3️⃣ An accountant receives it and replies here\n\nCommands:\n/new — new task\n/tasks — my tasks\n/company — change company\n/lang — change language\n/help — help",
     langSaved: "Language saved 🇬🇧",
-    menu: { newTask: "➕ New task", myTasks: "📂 History", repeat: "🔁 Repeat", help: "❓ Help" },
+    menu: { newTask: "📝 New task", myTasks: "📋 My tasks", lang: "🌐 Language", help: "ℹ️ Help" },
     activeTitle: "🔥 Active:",
     historyTitle: "🗂 History:",
     reuseHint: "Tap 🔁 to reuse a task from history.",
@@ -318,7 +318,7 @@ function mainKb(lang) {
   return {
     keyboard: [
       [{ text: m.newTask }, { text: m.myTasks }],
-      [{ text: m.repeat }, { text: m.help }],
+      [{ text: m.lang }, { text: m.help }],
     ],
     resize_keyboard: true,
     is_persistent: true,
@@ -429,7 +429,7 @@ async function finishOnboarding(ctx, u) {
   return;
 }
 
-const STATUS_EMOJI = { new: "⚪️", in_progress: "🔵", done: "🟢" };
+const STATUS_EMOJI = { new: "⚪️", in_progress: "🔵", done: "✅" };
 
 /* Журнал событий для CRM (logs:telegram) */
 async function logEvent(source, event, data) {
@@ -608,20 +608,17 @@ bot.callbackQuery(/^lang:(ru|uz|en)$/, async (ctx) => {
   return ctx.reply(T[lang].idleHint, { reply_markup: mainKb(lang) });
 });
 
-/* ---------------- Повтор задачи из истории ----------------
-   Общая логика используется и инлайн-кнопкой "🔁 №N" под конкретной
-   задачей в /tasks, и постоянной кнопкой меню "🔁 Повторить" (берёт
-   самую последнюю задачу пользователя, num[0] из utasks:<id>). */
-async function reuseTask(ctx, u, num, viaCallback) {
+/* ---------------- Повтор задачи из истории ---------------- */
+bot.callbackQuery(/^reuse:(\d+)$/, async (ctx) => {
+  const u = await getUser(ctx.from.id);
+  if (!u || !u.lang) return ctx.answerCallbackQuery();
   const t = T[u.lang];
-  const task = num ? await redis.get(taskKey(Number(num))) : null;
-  if (!task) {
-    return viaCallback ? ctx.answerCallbackQuery("✖️") : ctx.reply(t.noTasks, { reply_markup: mainKb(u.lang) });
-  }
+  const task = await redis.get(taskKey(Number(ctx.match[1])));
+  if (!task) return ctx.answerCallbackQuery("✖️");
   u.state = "draft";
   u.draft = { text: task.text || "", files: task.files || [] };
   await setUser(ctx.from.id, u);
-  if (viaCallback) await ctx.answerCallbackQuery("🔁");
+  await ctx.answerCallbackQuery("🔁");
   await logEvent("telegram", "task_reused", { num: task.num, company: task.company });
   return sendLong(
     ctx,
@@ -629,12 +626,6 @@ async function reuseTask(ctx, u, num, viaCallback) {
     (u.draft.files.length ? "\n📎 " + u.draft.files.length : ""),
     { reply_markup: draftKb(t) }
   );
-}
-
-bot.callbackQuery(/^reuse:(\d+)$/, async (ctx) => {
-  const u = await getUser(ctx.from.id);
-  if (!u || !u.lang) return ctx.answerCallbackQuery();
-  return reuseTask(ctx, u, ctx.match[1], true);
 });
 
 /* ---------------- Подтверждение компании ---------------- */
@@ -880,10 +871,7 @@ bot.on("message", async (ctx) => {
         return ctx.reply(t.idleHint, { reply_markup: mainKb(u.lang) });
       }
       if (plain === M.myTasks) return listTasks(ctx, u);
-      if (plain === M.repeat) {
-        const lastNum = (await redis.lrange("utasks:" + ctx.from.id, 0, 0))[0];
-        return reuseTask(ctx, u, lastNum, false);
-      }
+      if (plain === M.lang) return ctx.reply(HELLO, { reply_markup: LANG_KB });
       if (plain === M.help) return ctx.reply(t.help + crmAccessBlock(u), { parse_mode: "HTML", reply_markup: mainKb(u.lang) });
     }
   }
