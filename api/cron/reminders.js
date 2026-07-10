@@ -43,10 +43,18 @@ const tg = (method, payload) =>
     body: JSON.stringify(payload),
   }).then((r) => r.json()).catch(() => null);
 
+function escapeHtml(s) {
+  return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/* Оформленные (HTML, по полям) сообщения-напоминания вместо сплошного текста */
 const MSG = {
-  ru: (n, text, due) => `⏰ Напоминание: задача №${n} должна быть готова до ${due}.\n\n${text}`,
-  uz: (n, text, due) => `⏰ Eslatma: №${n} vazifa ${due} sanasigacha tayyor bo'lishi kerak.\n\n${text}`,
-  en: (n, text, due) => `⏰ Reminder: task #${n} is due by ${due}.\n\n${text}`,
+  ru: (n, text, due) =>
+    `⏰ <b>Напоминание</b>\n\nЗадача: №${n}\nСрок: ${due}\n\n${escapeHtml(text)}`,
+  uz: (n, text, due) =>
+    `⏰ <b>Eslatma</b>\n\nVazifa: №${n}\nMuddat: ${due}\n\n${escapeHtml(text)}`,
+  en: (n, text, due) =>
+    `⏰ <b>Reminder</b>\n\nTask: #${n}\nDue: ${due}\n\n${escapeHtml(text)}`,
 };
 
 function tashkentDateStr(d) {
@@ -99,15 +107,16 @@ async function processTaskReminders(todayStr) {
   try {
     const group = await redis.get("group");
     if (group && (overdue.length || dueToday.length)) {
-      const line = (t) => `№${t.num} · ${t.company} · до ${t.dueDate}${t.assignee ? ` · ${t.assignee}` : ""}`;
-      let text = `⏰ Напоминания на ${todayStr}\n`;
+      const line = (t) =>
+        `№${t.num} · ${escapeHtml(t.company)}\nСрок: ${t.dueDate}${t.assignee ? `\nИсполнитель: ${escapeHtml(t.assignee)}` : ""}`;
+      let text = `⏰ <b>Напоминания на ${todayStr}</b>`;
       if (overdue.length) {
-        text += `\n🔴 Просрочено (${overdue.length}):\n` + overdue.map(line).join("\n");
+        text += `\n\n🔴 <b>Просрочено (${overdue.length})</b>\n\n` + overdue.map(line).join("\n\n");
       }
       if (dueToday.length) {
-        text += `\n\n🟡 Срок сегодня (${dueToday.length}):\n` + dueToday.map(line).join("\n");
+        text += `\n\n🟡 <b>Срок сегодня (${dueToday.length})</b>\n\n` + dueToday.map(line).join("\n\n");
       }
-      await tg("sendMessage", { chat_id: Number(group), text });
+      await tg("sendMessage", { chat_id: Number(group), text, parse_mode: "HTML" });
     }
   } catch (e) { /* карточка не критична */ }
 
@@ -119,7 +128,7 @@ async function processTaskReminders(todayStr) {
     try {
       const u = await redis.get("user:" + t.client);
       const lang = (u && u.lang) || "ru";
-      await tg("sendMessage", { chat_id: t.client, text: MSG[lang](t.num, t.text, t.dueDate) });
+      await tg("sendMessage", { chat_id: t.client, text: MSG[lang](t.num, t.text, t.dueDate), parse_mode: "HTML" });
       t.lastReminderDate = todayStr;
       await redis.set("task:" + t.num, t);
       notified++;
@@ -150,10 +159,13 @@ async function processCalendarEvents(todayStr) {
         const label = ev.type === "tax" ? "Налог/отчёт" : "Платёж";
         const companyLabel = ev.company || "Все клиенты";
         const tag = todayStr > ev.date ? " (просрочено)" : todayStr === ev.date ? " (сегодня)" : "";
-        await tg("sendMessage", {
-          chat_id: Number(group),
-          text: `🔔 ${label}: ${ev.title}\n${companyLabel} · срок ${ev.date}${tag}`,
-        });
+        const text =
+          `🔔 <b>Напоминание</b>\n\n` +
+          `Тип: ${label}\n` +
+          `Название: ${escapeHtml(ev.title)}\n` +
+          `Компания: ${escapeHtml(companyLabel)}\n` +
+          `Срок: ${ev.date}${tag}`;
+        await tg("sendMessage", { chat_id: Number(group), text, parse_mode: "HTML" });
         ev.lastNotifiedDate = todayStr;
         notified++;
       } catch (e) { /* noop */ }

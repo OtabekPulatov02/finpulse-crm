@@ -32,6 +32,37 @@ function genPassword() {
   for (let i = 0; i < 8; i++) out += alphabet[bytes[i] % alphabet.length];
   return out;
 }
+
+function escapeHtml(s) {
+  return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+const CRM_BLOCK_LABEL = {
+  ru: { title: "🔐 <b>Доступ в CRM</b>", site: "Сайт", login: "Логин", pass: "Пароль", regen: "используйте команду /password, чтобы получить новый пароль" },
+  uz: { title: "🔐 <b>CRM'ga kirish</b>", site: "Sayt", login: "Login", pass: "Parol", regen: "yangi parol olish uchun /password buyrug'ini yuboring" },
+  en: { title: "🔐 <b>CRM access</b>", site: "Site", login: "Login", pass: "Password", regen: "send /password to get a new password" },
+};
+
+/* Блок с доступами в CRM для подстановки в /help — чтобы не нужно было
+   закреплять отдельное сообщение с логином/паролем. */
+function crmAccessBlock(u) {
+  if (!u || !u.authPhone) return "";
+  const lang = u.lang || "ru";
+  const L = CRM_BLOCK_LABEL[lang] || CRM_BLOCK_LABEL.ru;
+  const passLine = u.pwdPlain ? `<code>${escapeHtml(u.pwdPlain)}</code>` : L.regen;
+  return `\n\n${L.title}\n${L.site}: ${process.env.CRM_APP_URL || "https://finpulse-crm-app.vercel.app"}\n${L.login}: <code>${escapeHtml(u.authPhone)}</code>\n${L.pass}: ${passLine}`;
+}
+
+/* Отправляет сообщение с доступами как HTML (кликабельные code-блоки для
+   копирования одним нажатием) и закрепляет его в чате, чтобы клиент не
+   потерял логин/пароль в истории переписки. */
+async function sendAndPinCreds(ctx, text) {
+  const msg = await ctx.reply(text, { parse_mode: "HTML" });
+  try {
+    await ctx.api.pinChatMessage(ctx.chat.id, msg.message_id, { disable_notification: true });
+  } catch (e) { /* бот может быть без прав закрепления — не критично */ }
+  return msg;
+}
 async function ensureClientCredentials(ctx, u) {
   if (!u.phone || u.pwdHash) return null; // уже есть пароль, либо телефон не указан
   return issueClientPassword(ctx, u);
@@ -65,6 +96,7 @@ async function issueClientPassword(ctx, u) {
   }
   const password = genPassword();
   u.pwdHash = bcrypt.hashSync(password, 10);
+  u.pwdPlain = password; // хранится, чтобы можно было показать доступ повторно в /help
   u.authPhone = phone;
   await redis.set("authphone:" + phone, ctx.from.id);
   return password;
@@ -170,7 +202,7 @@ const T = {
     btnYes: "✅ Да, верно",
     btnNo: "✍️ Нет, другая",
     crmCreds: (login, pass) =>
-      `🔐 Доступ в личный кабинет CRM:\nСайт: ${process.env.CRM_APP_URL || "https://finpulse-crm-app.vercel.app"}\nЛогин (телефон): ${login}\nПароль: ${pass}\n\nПароль выдаётся один раз — сохраните его. Сменить можно, написав в чат «/password».`,
+      `🔐 <b>Доступ в личный кабинет CRM</b>\n\nСайт:\n${process.env.CRM_APP_URL || "https://finpulse-crm-app.vercel.app"}\n\nЛогин (телефон):\n<code>${escapeHtml(login)}</code>\n\nПароль:\n<code>${escapeHtml(pass)}</code>\n\nНажмите на логин или пароль, чтобы скопировать. Этот же доступ всегда можно посмотреть командой /help. Сменить пароль — командой /password.`,
     crmPending: "🔐 Этот телефон уже привязан к другой карточке клиента в CRM. Доступ в кабинет выдадим после проверки бухгалтером.",
   },
   uz: {
@@ -207,7 +239,7 @@ const T = {
     btnYes: "✅ Ha, to'g'ri",
     btnNo: "✍️ Yo'q, boshqa",
     crmCreds: (login, pass) =>
-      `🔐 CRM shaxsiy kabinetiga kirish:\nSayt: ${process.env.CRM_APP_URL || "https://finpulse-crm-app.vercel.app"}\nLogin (telefon): ${login}\nParol: ${pass}\n\nParol faqat bir marta beriladi — saqlab qo'ying. O'zgartirish uchun chatga «/password» yozing.`,
+      `🔐 <b>CRM shaxsiy kabinetiga kirish</b>\n\nSayt:\n${process.env.CRM_APP_URL || "https://finpulse-crm-app.vercel.app"}\n\nLogin (telefon):\n<code>${escapeHtml(login)}</code>\n\nParol:\n<code>${escapeHtml(pass)}</code>\n\nNusxalash uchun login yoki parolga bosing. Bu ma'lumotni /help buyrug'i orqali doim ko'rish mumkin. Parolni o'zgartirish — /password.`,
     crmPending: "🔐 Bu telefon raqami CRM'da boshqa mijoz kartasiga biriktirilgan. Kabinetga kirish buxgalter tekshiruvidan so'ng beriladi.",
   },
   en: {
@@ -244,7 +276,7 @@ const T = {
     btnYes: "✅ Yes, correct",
     btnNo: "✍️ No, different",
     crmCreds: (login, pass) =>
-      `🔐 CRM portal access:\nSite: ${process.env.CRM_APP_URL || "https://finpulse-crm-app.vercel.app"}\nLogin (phone): ${login}\nPassword: ${pass}\n\nThe password is issued once — please save it. To change it, write "/password" in this chat.`,
+      `🔐 <b>CRM portal access</b>\n\nSite:\n${process.env.CRM_APP_URL || "https://finpulse-crm-app.vercel.app"}\n\nLogin (phone):\n<code>${escapeHtml(login)}</code>\n\nPassword:\n<code>${escapeHtml(pass)}</code>\n\nTap the login or password to copy it. You can always view this again via /help. To change the password, send /password.`,
     crmPending: "🔐 This phone number is already linked to another client record in the CRM. Portal access will be granted after an accountant reviews it.",
   },
 };
@@ -390,7 +422,7 @@ async function finishOnboarding(ctx, u) {
   await setUser(ctx.from.id, u);
   await ctx.reply(t.ready(u.company), { reply_markup: mainKb(u.lang) });
   if (newPassword) {
-    await ctx.reply(t.crmCreds(u.authPhone, newPassword));
+    await sendAndPinCreds(ctx, t.crmCreds(u.authPhone, newPassword));
   } else if (u.phone && !u.pwdHash) {
     await ctx.reply(t.crmPending);
   }
@@ -503,7 +535,8 @@ bot.command("lang", async (ctx) => {
 bot.command("help", async (ctx) => {
   if (!isPrivate(ctx)) return;
   const u = await getUser(ctx.from.id);
-  return ctx.reply(T[u?.lang || "ru"].help);
+  const text = T[u?.lang || "ru"].help + crmAccessBlock(u);
+  return ctx.reply(text, { parse_mode: "HTML" });
 });
 
 bot.command(["new", "cancel"], async (ctx) => {
@@ -542,7 +575,7 @@ bot.command("password", async (ctx) => {
   if (!password) {
     return ctx.reply(T[u.lang].crmPending);
   }
-  return ctx.reply(T[u.lang].crmCreds(u.authPhone, password));
+  return sendAndPinCreds(ctx, T[u.lang].crmCreds(u.authPhone, password));
 });
 
 /* ---------------- Команды: группа ---------------- */
@@ -839,7 +872,7 @@ bot.on("message", async (ctx) => {
       }
       if (plain === M.myTasks) return listTasks(ctx, u);
       if (plain === M.lang) return ctx.reply(HELLO, { reply_markup: LANG_KB });
-      if (plain === M.help) return ctx.reply(t.help, { reply_markup: mainKb(u.lang) });
+      if (plain === M.help) return ctx.reply(t.help + crmAccessBlock(u), { parse_mode: "HTML", reply_markup: mainKb(u.lang) });
     }
   }
 
