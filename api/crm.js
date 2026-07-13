@@ -738,7 +738,7 @@ async function listCalendar(companyFilter) {
   const rows = (await redis.mget(...keys)).filter(Boolean);
   const todayStr = tashkentDateStr();
   let list = rows
-    .filter((t) => t.dueDate && t.status !== "done")
+    .filter((t) => t.dueDate && t.status !== "done" && t.status !== "cancelled")
     .map((t) => ({
       num: t.num,
       company: t.company,
