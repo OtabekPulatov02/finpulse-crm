@@ -439,7 +439,7 @@ async function finishOnboarding(ctx, u) {
   return;
 }
 
-const STATUS_EMOJI = { new: "⚪️", in_progress: "🔵", done: "✅" };
+const STATUS_EMOJI = { new: "⚪️", in_progress: "🔵", done: "✅", cancelled: "🚫" };
 
 /* Журнал событий для CRM (logs:telegram) */
 async function logEvent(source, event, data) {
