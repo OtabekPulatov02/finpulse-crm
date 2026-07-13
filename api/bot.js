@@ -852,12 +852,33 @@ bot.on("message", async (ctx) => {
        в task.files, чтобы он тоже появился во вложениях в CRM (та же
        логика, что и для вложений, добавленных через CRM/при создании). */
     const bfile = extractFile(msg);
+    let bFileIdx = null;
     if (bfile) {
       task.files = Array.isArray(task.files) ? task.files : [];
       task.files.push(bfile);
+      bFileIdx = task.files.length - 1;
       task.updatedAt = new Date().toISOString();
-      await redis.set(taskKey(Number(num)), task);
       await logEvent("telegram", "task_file_attached", { num: task.num, by: "accountant" });
+    }
+
+    /* Текст/подпись реплая тоже сохраняем в task.thread — это и есть лента
+       чата задачи, которую видно в CRM (полноценный двусторонний чат). */
+    const bText = (msg.text || msg.caption || "").trim();
+    if (bText || bFileIdx !== null) {
+      const byName = [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(" ") || "Бухгалтер";
+      task.thread = Array.isArray(task.thread) ? task.thread : [];
+      task.thread.push({
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        at: new Date().toISOString(),
+        from: "staff",
+        by: byName,
+        text: bText || null,
+        fileIndex: bFileIdx,
+      });
+      if (task.thread.length > 200) task.thread = task.thread.slice(-200);
+    }
+    if (bfile || bText) {
+      await redis.set(taskKey(Number(num)), task);
     }
 
     const clientLang = (await getUser(task.client))?.lang || "ru";
@@ -963,12 +984,32 @@ bot.on("message", async (ctx) => {
         /* Клиент прикрепил файл реплаем на свою задачу — сохраняем в
            task.files, чтобы вложение появилось и в CRM. */
         const cfile = extractFile(msg);
+        let cFileIdx = null;
         if (cfile) {
           task.files = Array.isArray(task.files) ? task.files : [];
           task.files.push(cfile);
+          cFileIdx = task.files.length - 1;
           task.updatedAt = new Date().toISOString();
-          await redis.set(taskKey(Number(num)), task);
           await logEvent("telegram", "task_file_attached", { num: task.num, by: "client" });
+        }
+
+        /* Текст/подпись реплая клиента тоже сохраняем в task.thread — та
+           же лента чата, что видна в CRM. */
+        const cText = (msg.text || msg.caption || "").trim();
+        if (cText || cFileIdx !== null) {
+          task.thread = Array.isArray(task.thread) ? task.thread : [];
+          task.thread.push({
+            id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            at: new Date().toISOString(),
+            from: "client",
+            by: task.company || "Клиент",
+            text: cText || null,
+            fileIndex: cFileIdx,
+          });
+          if (task.thread.length > 200) task.thread = task.thread.slice(-200);
+        }
+        if (cfile || cText) {
+          await redis.set(taskKey(Number(num)), task);
         }
 
         const opts = task.gmsg ? { reply_to_message_id: task.gmsg } : {};
