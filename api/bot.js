@@ -15,6 +15,24 @@ const { Redis } = require("@upstash/redis");
 const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
 
+if (!process.env.TG_WEBHOOK_SECRET) {
+  console.warn("SECURITY: TG_WEBHOOK_SECRET не задан — вебхук бота не проверяет, что запрос действительно пришёл от Telegram.");
+} else if (process.env.TG_WEBHOOK_SECRET.length < 32) {
+  console.warn("SECURITY: TG_WEBHOOK_SECRET короче 32 символов — увеличьте длину секрета.");
+}
+if (process.env.BIND_CODE && process.env.BIND_CODE.length < 20) {
+  console.warn("SECURITY: BIND_CODE короче 20 символов — увеличьте длину секрета.");
+}
+
+/* Сравнение секретов за постоянное время (BIND_CODE и т.п.) — обычное
+   === теоретически позволяет измерять тайминг посимвольного сравнения. */
+function timingSafeStringEqual(a, b) {
+  const bufA = Buffer.from(String(a || ""), "utf8");
+  const bufB = Buffer.from(String(b || ""), "utf8");
+  if (bufA.length !== bufB.length) return false;
+  try { return crypto.timingSafeEqual(bufA, bufB); } catch { return false; }
+}
+
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL,
   token: process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN,
@@ -93,6 +111,37 @@ async function ensureClientCredentials(ctx, u) {
    не выдаём доступ автоматически и зовём бухгалтеров разобраться. */
 async function issueClientPassword(ctx, u) {
   const phone = normPhone(u.phone);
+
+  /* Верификация принадлежности к компании: доступ в CRM привязывается к
+     компании ПО НАЗВАНИЮ, которое человек сам вводит в чате с ботом — это
+     не секрет и не проверяется ничем, кроме нечёткого совпадения с уже
+     существующими компаниями. Если по этой компании уже есть реальная
+     карточка клиента (client:<id>) с известным телефоном, а сейчас
+     регистрируется кто-то с ДРУГИМ телефоном — не выдаём пароль
+     автоматически. Иначе любой, кто просто знает название чужой компании,
+     мог бы получить логин/пароль в CRM от её имени. */
+  if (u.company) {
+    try {
+      const existingClientId = await redis.get("clientcompany:" + normCompany(u.company));
+      if (existingClientId) {
+        const existingClient = await redis.get("client:" + existingClientId);
+        const knownPhone = existingClient && existingClient.phone ? normPhone(existingClient.phone) : null;
+        if (knownPhone && knownPhone !== phone) {
+          await logEvent("telegram", "company_claim_phone_mismatch", {
+            company: u.company, claimedPhone: phone, knownPhone, telegramId: ctx.from.id,
+          });
+          try {
+            await sendToGroup((gid) => bot.api.sendMessage(gid,
+              `⚠️ Кто-то представился клиентом компании «${u.company}» с телефоном ${formatPhoneDisplay(phone)}, ` +
+              `но в карточке клиента указан другой телефон (${formatPhoneDisplay(knownPhone)}). ` +
+              `Доступ в CRM не выдан автоматически — проверьте вручную в разделе «Клиенты».`));
+          } catch (e) { /* noop */ }
+          return null;
+        }
+      }
+    } catch (e) { /* сбой проверки не должен блокировать легитимных новых клиентов */ }
+  }
+
   const existingOwnerId = await redis.get("authphone:" + phone);
   if (existingOwnerId && String(existingOwnerId) !== String(ctx.from.id)) {
     const otherUser = await getUser(existingOwnerId);
@@ -145,6 +194,41 @@ async function upsertClient(u, telegramId) {
   const id = idByCompany || idByPhone;
   if (id) {
     const existing = (await redis.get("client:" + id)) || {};
+
+    /* Не переключаем telegramId (а значит — куда уходят уведомления и от
+       чьего имени создаются задачи) молча, если карточка уже привязана к
+       ДРУГОМУ Telegram-аккаунту, а телефон нового обращения не совпадает
+       с уже известным телефоном клиента. Компания в этом чате — просто
+       текст, который ввёл пользователь, и без проверки телефона это не
+       доказывает, что это тот же самый клиент. */
+    const knownPhone = existing.phone ? normPhone(existing.phone) : null;
+    const telegramChanged = existing.telegramId && String(existing.telegramId) !== String(telegramId);
+    const ownershipVerified = !knownPhone || (phone && knownPhone === phone);
+
+    if (telegramChanged && !ownershipVerified) {
+      await logEvent("telegram", "client_telegram_claim_mismatch", {
+        clientId: id, company: u.company, existingTelegramId: existing.telegramId, claimedTelegramId: telegramId, phone,
+      });
+      try {
+        await sendToGroup((gid) => bot.api.sendMessage(gid,
+          `⚠️ Новый Telegram-аккаунт представился клиентом «${existing.company || u.company}», но карточка уже привязана к другому аккаунту. ` +
+          `Уведомления НЕ переключены на новый аккаунт — при необходимости подтвердите вручную в разделе «Клиенты».`));
+      } catch (e) { /* noop */ }
+      const mergedSafe = {
+        ...existing,
+        id,
+        company: existing.company || u.company,
+        position: existing.position || u.position || null,
+        phone: existing.phone || phone,
+        updatedAt: new Date().toISOString(),
+        /* telegramId сознательно НЕ обновляем */
+      };
+      await redis.set("client:" + id, mergedSafe);
+      if (!idByCompany) await redis.set("clientcompany:" + normC, id);
+      if (phone && !idByPhone) await redis.set("clientphone:" + phone, id);
+      return id;
+    }
+
     const merged = {
       ...existing,
       id,
@@ -467,8 +551,8 @@ async function listTasks(ctx, u) {
   if (!nums.length) return ctx.reply(t.noTasks, { reply_markup: mainKb(u.lang) });
 
   const active = [], history = [];
-  for (const n of nums) {
-    const task = await redis.get(taskKey(Number(n)));
+  const fetched = (await redis.mget(...nums.map((n) => taskKey(Number(n))))) || [];
+  for (const task of fetched) {
     if (!task) continue;
     (task.status === "done" ? history : active).push(task);
   }
@@ -635,7 +719,7 @@ bot.on("message:migrate_to_chat_id", async (ctx) => {
 bot.command("bind", async (ctx) => {
   if (!isGroup(ctx)) return;
   const code = (ctx.match || "").trim();
-  if (!process.env.BIND_CODE || code !== process.env.BIND_CODE) {
+  if (!process.env.BIND_CODE || !timingSafeStringEqual(code, process.env.BIND_CODE)) {
     return ctx.reply("❌ Неверный код привязки. Используйте: /bind ВАШ_КОД");
   }
   await redis.set("group", ctx.chat.id);
@@ -1122,7 +1206,7 @@ const handleUpdate = webhookCallback(bot, "http", {
 module.exports = async (req, res) => {
   if (req.method !== "POST") {
     const q = req.query || {};
-    if (q.setup && process.env.BIND_CODE && q.setup === process.env.BIND_CODE) {
+    if (q.setup && process.env.BIND_CODE && timingSafeStringEqual(q.setup, process.env.BIND_CODE)) {
       try {
         const done = await setupBotProfile();
         res.status(200).json({ ok: true, setup: done, message: "Профиль бота обновлён: команды, описание, короткое описание (ru/uz/en)" });

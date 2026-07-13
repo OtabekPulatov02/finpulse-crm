@@ -35,6 +35,11 @@ const redis = new Redis({
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const CRON_SECRET = process.env.CRON_SECRET || "";
+if (!CRON_SECRET) {
+  console.warn("SECURITY: CRON_SECRET не задан — эндпоинт крона открыт для любого, кто найдёт URL.");
+} else if (CRON_SECRET.length < 20) {
+  console.warn("SECURITY: CRON_SECRET короче 20 символов — увеличьте длину секрета.");
+}
 
 const tg = (method, payload) =>
   fetch(`https://api.telegram.org/bot${TOKEN}/${method}`, {
@@ -266,10 +271,17 @@ async function processCalendarEvents(todayStr) {
   return { checked: rows.length, advanced, deactivated, tasksCreated };
 }
 
+function timingSafeStringEqual(a, b) {
+  const bufA = Buffer.from(String(a || ""), "utf8");
+  const bufB = Buffer.from(String(b || ""), "utf8");
+  if (bufA.length !== bufB.length) return false;
+  try { return require("crypto").timingSafeEqual(bufA, bufB); } catch { return false; }
+}
+
 module.exports = async (req, res) => {
   if (CRON_SECRET) {
     const auth = req.headers["authorization"] || "";
-    if (auth !== `Bearer ${CRON_SECRET}`) {
+    if (!timingSafeStringEqual(auth, `Bearer ${CRON_SECRET}`)) {
       return res.status(401).json({ ok: false, error: "unauthorized" });
     }
   }
