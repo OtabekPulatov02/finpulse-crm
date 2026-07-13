@@ -26,6 +26,95 @@ async function logEvent(event, data) {
   } catch (e) { /* noop */ }
 }
 
+
+/* ---------------- AI-агент супер-админа ----------------
+   Инструменты — существующие эндпоинты /api/crm и /api/1c,
+   вызываются с JWT самого админа: агент умеет всё то же,
+   что и админ в интерфейсе, и ничего сверх этого. */
+
+const SELF = process.env.CRM_API_ORIGIN || "https://finpulse-crm.vercel.app";
+
+const AGENT_SYSTEM = `Ты — операционный AI-ассистент CRM Finpulse (бухгалтерская компания, Узбекистан, суммы в UZS).
+Ты выполняешь поручения супер-админа через инструменты crm_get/crm_post/onec_get/onec_post.
+
+Справка по API (crm_get query / crm_post body):
+GET: r=ping | r=tasks | r=clients | r=client&id=<id> | r=usage | r=tariffs | r=logs&src=telegram|crm | r=pending | r=access_requests | r=employees | r=calendar | r=calendar_events | r=bot_settings | r=bot_categories | r=bot_positions
+POST actions:
+- {action:"status", num, status:"new|in_progress|done|cancelled", assignee} — статус задачи (уведомит клиента в Telegram)
+- {action:"task_create", company|clientId, text, assignee?, dueDate?"YYYY-MM-DD"} / {action:"task_update", num, patch:{text?,assignee?,dueDate?}} / {action:"task_delete", num}
+- {action:"client_create", company, phone?, position?, tariff?, assignedTo?} / {action:"client_update", id, patch:{...поля карточки, вкл. inn,fullName,pinfl,vatCode,taxSystem,bank,mfo,bankAccount,address,director,taxOffice,tariff,status}} / {action:"client_delete", id}
+- {action:"tariffs_save", tariffs:[{id,name,price,monthlyLimit,overPackOps,overPackPrice}]} | {action:"ops_pack_add", clientId, packs}
+- {action:"bot_settings_save", settings:{slaHours,workStart,workEnd}} | {action:"bot_categories_save", categories:[{id,name,subs[]}]} | {action:"bot_positions_save", positions:[...]}
+- {action:"access_request_resolve", id, approve:true|false}
+- {action:"employee_create", name, phone, role:"admin|accountant"} / {action:"employee_update", id, patch} / {action:"employee_reset_password", id} / {action:"employee_delete", id}
+- {action:"calendar_event_create", type:"tax|pay", title, company?, date, repeat?, remindDays?} / _update / _delete
+onec_get: r=apps | r=ping | r=meta&app=<code> | r=orgs&app=<code>; onec_post: {action:"sync_orgs", app}
+
+Правила:
+1. Всегда сначала читай данные (crm_get), потом действуй.
+2. Деструктивные действия (delete, сброс пароля, массовые изменения) — только после явного подтверждения в диалоге. Если его нет — опиши, что собираешься сделать, и спроси.
+3. Отвечай кратко, по-русски, с итогом что сделано. Числа/суммы — как в данных.
+4. Если данных нет или API вернул ошибку — скажи честно.`;
+
+const AGENT_TOOLS = [
+  { type: "function", function: { name: "crm_get", description: "GET-запрос к /api/crm. Аргумент query — строка после ?, напр. \"r=tasks\"", parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } } },
+  { type: "function", function: { name: "crm_post", description: "POST к /api/crm. body — объект действия, напр. {\"action\":\"status\",\"num\":106,\"status\":\"done\"}", parameters: { type: "object", properties: { body: { type: "object" } }, required: ["body"] } } },
+  { type: "function", function: { name: "onec_get", description: "GET к /api/1c (интеграция 1С). query напр. \"r=ping\"", parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } } },
+  { type: "function", function: { name: "onec_post", description: "POST к /api/1c, напр. {\"action\":\"sync_orgs\",\"app\":\"46516\"}", parameters: { type: "object", properties: { body: { type: "object" } }, required: ["body"] } } },
+];
+
+async function callTool(name, args, authHeader) {
+  const base = name.startsWith("crm") ? SELF + "/api/crm" : SELF + "/api/1c";
+  try {
+    let r;
+    if (name.endsWith("_get")) {
+      r = await fetch(base + "?" + String(args.query || ""), { headers: { authorization: authHeader }, signal: AbortSignal.timeout(20000) });
+    } else {
+      r = await fetch(base, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: authHeader },
+        body: JSON.stringify(args.body || {}),
+        signal: AbortSignal.timeout(25000),
+      });
+    }
+    const text = await r.text();
+    return text.slice(0, 6000);
+  } catch (e) {
+    return JSON.stringify({ ok: false, error: String(e).slice(0, 200) });
+  }
+}
+
+async function runAgent(messages, authHeader) {
+  const KEY = process.env.OPENAI_API_KEY;
+  const MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
+  const convo = [{ role: "system", content: AGENT_SYSTEM }, ...messages.slice(-20)];
+  const steps = [];
+  for (let i = 0; i < 8; i++) {
+    const r = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${KEY}` },
+      body: JSON.stringify({ model: MODEL, messages: convo, tools: AGENT_TOOLS, temperature: 0.1, max_tokens: 900 }),
+      signal: AbortSignal.timeout(45000),
+    });
+    if (!r.ok) throw new Error(`OpenAI HTTP ${r.status}: ${(await r.text()).slice(0, 200)}`);
+    const data = await r.json();
+    const msg = data.choices?.[0]?.message;
+    if (!msg) throw new Error("empty completion");
+    convo.push(msg);
+    if (!msg.tool_calls || !msg.tool_calls.length) {
+      return { reply: msg.content || "(пустой ответ)", steps };
+    }
+    for (const tc of msg.tool_calls) {
+      let args = {};
+      try { args = JSON.parse(tc.function.arguments || "{}"); } catch (e) { /* noop */ }
+      const result = await callTool(tc.function.name, args, authHeader);
+      steps.push({ tool: tc.function.name, args: JSON.stringify(args).slice(0, 200), ok: !result.includes('"ok":false') });
+      convo.push({ role: "tool", tool_call_id: tc.id, content: result });
+    }
+  }
+  return { reply: "Достигнут лимит шагов — уточните задачу или разбейте её на части.", steps };
+}
+
 module.exports = async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
@@ -75,6 +164,13 @@ module.exports = async (req, res) => {
       if (typeof body === "string") { try { body = JSON.parse(body); } catch { body = {}; } }
       const actor = (authUser && authUser.name) || "CRM";
 
+      if (body && body.action === "agent" && Array.isArray(body.messages)) {
+        const isAdmin = !JWT_SECRET || (authUser && authUser.role === "admin");
+        if (!isAdmin) return res.status(403).json({ ok: false, error: "только супер-админ" });
+        const out = await runAgent(body.messages, req.headers.authorization || "");
+        await logEvent("ai_agent_run", { steps: out.steps.length, by: actor });
+        return res.status(200).json({ ok: true, ...out });
+      }
       if (body && body.action === "settings_save" && body.settings) {
         const clean = {
           classify: body.settings.classify !== false,
