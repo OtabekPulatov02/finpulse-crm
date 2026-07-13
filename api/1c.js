@@ -1,0 +1,218 @@
+/* ============================================================
+   Finpulse CRM — интеграция с 1С:Фреш (Clobus.uz)
+
+   Конфигурация: «Бухгалтерия для Узбекистана, ред. 3.0».
+   Доступ: стандартный OData-интерфейс каждого приложения
+   (basic auth пользователем 1С, например crm_api).
+
+   Статус: OData включён на платформе, но состав объектов
+   настраивает провайдер (Venkon/Clobus) по обращению.
+   Модуль работает в «деградированном» режиме, пока состав пуст:
+   ping показывает готовность каждой базы.
+
+   GET  /api/1c?r=apps                     → список приложений
+   GET  /api/1c?r=ping                     → доступность OData по всем базам
+   GET  /api/1c?r=orgs&app=<code>          → организации приложения
+   GET  /api/1c?r=meta&app=<code>          → список сущностей OData (что включили)
+   POST /api/1c {action:"sync_orgs", app}  → организации → клиенты CRM
+   ============================================================ */
+
+const { Redis } = require("@upstash/redis");
+
+const redis = new Redis({
+  url: process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL,
+  token: process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN,
+});
+
+const BASE = process.env.ODATA_1C_BASE || "https://clobus.uz";
+const LOGIN = process.env.ODATA_1C_LOGIN || "";
+const PASSWORD = process.env.ODATA_1C_PASSWORD || "";
+
+/* Приложения абонента 6366 (инвентаризация 13.07.2026).
+   Можно переопределить ключом Redis 1c:apps (JSON-массив). */
+const DEFAULT_APPS = [
+  { code: "68111", path: "/a/acc316/68111", name: "ADELE GROUP COMP" },
+  { code: "46516", path: "/a/acc311/46516", name: "finpulse" },
+  { code: "70639", path: "/a/acc318/70639", name: "Online Organic" },
+  { code: "55833", path: "/a/acc311/55833", name: "OOO SERPHUNT" },
+  { code: "72467", path: "/a/acc319/72467", name: "OOO UGOLOK" },
+  { code: "69781", path: "/a/acc317/69781", name: "PRESTIGE CLUB" },
+  { code: "52354", path: "/a/acc312/52354", name: "PROMET" },
+  { code: "63564", path: "/a/acc315/63564", name: "RED TEAM TASHKENT" },
+  { code: "54437", path: "/a/acc314/54437", name: "THE TEAM PROJECT" },
+  { code: "70307", path: "/a/acc318/70307", name: "Бухгалтерия УЗ 3.0 (без имени)" },
+];
+
+async function getApps() {
+  try {
+    const custom = await redis.get("1c:apps");
+    if (Array.isArray(custom) && custom.length) return custom;
+  } catch (e) { /* noop */ }
+  return DEFAULT_APPS;
+}
+
+function authHeader() {
+  return "Basic " + Buffer.from(`${LOGIN}:${PASSWORD}`).toString("base64");
+}
+
+async function odata(appPath, resource, params) {
+  const url = `${BASE}${appPath}/odata/standard.odata/${resource}${params ? `?${params}` : ""}`;
+  const r = await fetch(url, {
+    headers: { Authorization: authHeader(), Accept: "application/json" },
+    signal: AbortSignal.timeout(20000),
+  });
+  const text = await r.text();
+  let json = null;
+  try { json = JSON.parse(text); } catch (e) { /* xml или html */ }
+  return { status: r.status, json, text };
+}
+
+async function logEvent(event, data) {
+  try {
+    await redis.lpush("logs:crm", JSON.stringify({ ts: new Date().toISOString(), event, ...data }));
+    await redis.ltrim("logs:crm", 0, 499);
+  } catch (e) { /* noop */ }
+}
+
+/* ---- ping всех баз: доступен ли OData и настроен ли состав ---- */
+async function pingAll() {
+  const apps = await getApps();
+  const results = await Promise.all(apps.map(async (a) => {
+    try {
+      const r = await odata(a.path, "", "$format=json");
+      const entities = r.json && Array.isArray(r.json.value) ? r.json.value.length : null;
+      return {
+        ...a,
+        reachable: r.status === 200,
+        авторизация: r.status !== 401,
+        entities,
+        ready: r.status === 200 && (entities ?? 0) > 0,
+      };
+    } catch (e) {
+      return { ...a, reachable: false, entities: null, ready: false, error: String(e).slice(0, 120) };
+    }
+  }));
+  return results;
+}
+
+/* ---- организации приложения (после включения состава OData) ---- */
+async function getOrgs(appPath) {
+  const r = await odata(appPath, "Catalog_Организации", "$format=json&$select=Ref_Key,Description,НаименованиеПолное,ИНН,КодПоОКПО&$filter=DeletionMark eq false");
+  if (r.status === 401) return { ok: false, error: "auth: проверьте ODATA_1C_LOGIN/PASSWORD (пользователь 1С в этой базе)" };
+  if (r.status === 404) return { ok: false, error: "Catalog_Организации не включён в состав OData — ждём поддержку Clobus" };
+  if (r.status !== 200 || !r.json) return { ok: false, error: `HTTP ${r.status}` };
+  return {
+    ok: true,
+    orgs: (r.json.value || []).map((o) => ({
+      ref: o.Ref_Key,
+      name: o.Description,
+      fullName: o["НаименованиеПолное"] || null,
+      inn: o["ИНН"] || null,
+    })),
+  };
+}
+
+/* ---- организации 1С → карточки клиентов CRM ---- */
+function normCompany(str) {
+  return String(str || "").toLowerCase()
+    .replace(/["«»'`]/g, "")
+    .replace(/\b(ооо|оао|зао|ип|ао|мчж|mchj|ooo|llc|ltd|mas'?uliyati cheklangan jamiyati|nodavlat ta'?lim muassasasi)\b/g, "")
+    .replace(/[^a-zа-яё0-9]+/gi, " ").trim().replace(/\s+/g, " ");
+}
+
+async function syncOrgs(appPath, appName, actor) {
+  const res = await getOrgs(appPath);
+  if (!res.ok) return res;
+  let created = 0, updated = 0;
+  for (const org of res.orgs) {
+    const norm = normCompany(org.name);
+    if (!norm) continue;
+    const existingId = await redis.get("clientcompany:" + norm);
+    if (existingId) {
+      const c = (await redis.get("client:" + existingId)) || {};
+      const next = { ...c, inn: c.inn || org.inn, source1c: { app: appPath, ref: org.ref, name: org.name }, updatedAt: new Date().toISOString() };
+      await redis.set("client:" + existingId, next);
+      updated++;
+    } else {
+      const id = "c" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+      await redis.set("client:" + id, {
+        id, company: org.name, inn: org.inn || null, phone: null, telegramId: null,
+        status: "active", tariff: null, assignedTo: null,
+        source1c: { app: appPath, ref: org.ref, name: org.name },
+        createdAt: new Date().toISOString(),
+      });
+      await redis.set("clientcompany:" + norm, id);
+      await redis.sadd("clients", id);
+      created++;
+    }
+  }
+  await logEvent("1c_sync_orgs", { app: appName, created, updated, total: res.orgs.length, by: actor || "CRM" });
+  return { ok: true, created, updated, total: res.orgs.length };
+}
+
+/* ---------------- handler ---------------- */
+module.exports = async (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "content-type,authorization");
+  if (req.method === "OPTIONS") return res.status(204).end();
+
+  /* та же JWT-проверка, что в crm.js */
+  let authUser = null;
+  const JWT_SECRET = process.env.CRM_JWT_SECRET;
+  if (JWT_SECRET) {
+    try {
+      const jwt = require("jsonwebtoken");
+      const m = /^Bearer\s+(.+)$/i.exec(req.headers.authorization || "");
+      if (m) authUser = jwt.verify(m[1], JWT_SECRET, { algorithms: ["HS256"] });
+    } catch (e) { /* noop */ }
+    const isStaff = authUser && (authUser.role === "admin" || authUser.role === "accountant");
+    if (!isStaff) return res.status(401).json({ ok: false, error: "staff auth required" });
+  }
+
+  if (!LOGIN || !PASSWORD) {
+    return res.status(200).json({
+      ok: false,
+      error: "Задайте ODATA_1C_LOGIN и ODATA_1C_PASSWORD в переменных Vercel (пользователь 1С, например crm_api)",
+    });
+  }
+
+  try {
+    const q = req.query || {};
+    const apps = await getApps();
+    const findApp = (code) => apps.find((a) => a.code === String(code));
+
+    if (req.method === "GET") {
+      if (q.r === "apps") return res.status(200).json({ ok: true, apps });
+      if (q.r === "ping") return res.status(200).json({ ok: true, apps: await pingAll() });
+      if (q.r === "meta" && q.app) {
+        const a = findApp(q.app);
+        if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
+        const r = await odata(a.path, "", "$format=json");
+        return res.status(200).json({ ok: r.status === 200, status: r.status, entities: r.json?.value ?? [] });
+      }
+      if (q.r === "orgs" && q.app) {
+        const a = findApp(q.app);
+        if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
+        return res.status(200).json(await getOrgs(a.path));
+      }
+      return res.status(200).json({ ok: true, service: "Finpulse 1C bridge", routes: ["apps", "ping", "meta", "orgs"] });
+    }
+
+    if (req.method === "POST") {
+      let body = req.body;
+      if (typeof body === "string") { try { body = JSON.parse(body); } catch { body = {}; } }
+      if (body && body.action === "sync_orgs" && body.app) {
+        const a = findApp(body.app);
+        if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
+        return res.status(200).json(await syncOrgs(a.path, a.name, authUser?.name));
+      }
+      return res.status(200).json({ ok: false, error: "unknown action" });
+    }
+
+    res.status(405).json({ ok: false });
+  } catch (e) {
+    console.error("1c api:", e);
+    res.status(200).json({ ok: false, error: String(e).slice(0, 300) });
+  }
+};
