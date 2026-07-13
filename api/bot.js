@@ -437,6 +437,162 @@ function mainKb(lang) {
   };
 }
 
+/* ---------------- Настройки бота (редактируются в CRM) ---------------- */
+const DEFAULT_BOT_SETTINGS = { slaHours: 3, workStart: 9, workEnd: 16, tzOffset: 5 };
+async function getBotSettings() {
+  try {
+    const s = await redis.get("bot:settings");
+    if (s && typeof s === "object") return { ...DEFAULT_BOT_SETTINGS, ...s };
+  } catch (e) { /* noop */ }
+  return DEFAULT_BOT_SETTINGS;
+}
+function localHour(set) {
+  const d = new Date(Date.now() + (set.tzOffset || 5) * 3600e3);
+  return d.getUTCHours() + d.getUTCMinutes() / 60;
+}
+function inWorkHours(set) {
+  const h = localHour(set);
+  return h >= set.workStart && h < set.workEnd;
+}
+
+/* ---------------- Категории услуг (редактируются в CRM) ---------------- */
+const DEFAULT_CATEGORIES = [
+  { id: "pay", name: "💸 Оплатить / платёжка", subs: ["Оплатить счёт поставщика", "Оплата налога", "Перевод между счетами", "Выплата зарплаты"] },
+  { id: "esf", name: "🧾 Счёт-фактура (ЭСФ)", subs: ["Выставить ЭСФ покупателю", "Проверить входящую ЭСФ", "Исправить / аннулировать ЭСФ"] },
+  { id: "sign", name: "✍️ Подписать документ", subs: [] },
+  { id: "akt", name: "🤝 Акт сверки", subs: ["С контрагентом", "С налоговой"] },
+  { id: "dogovor", name: "📄 Договор", subs: ["Подготовить договор", "Проверить договор контрагента"] },
+  { id: "hr", name: "👥 Кадры", subs: ["Принять сотрудника", "Уволить сотрудника", "Отпуск / больничный"] },
+  { id: "report", name: "📊 Отчёты и налоги", subs: ["Сдать отчёт", "Сколько налогов к оплате?", "Справка из налоговой"] },
+  { id: "bank", name: "🏦 Банк / выписка", subs: ["Выписка по счёту", "Открыть / закрыть счёт"] },
+  { id: "consult", name: "💬 Консультация", subs: [] },
+  { id: "other", name: "📝 Другое", subs: [] },
+];
+async function getCategories() {
+  try {
+    const c = await redis.get("bot:categories");
+    if (Array.isArray(c) && c.length) return c;
+  } catch (e) { /* noop */ }
+  return DEFAULT_CATEGORIES;
+}
+/* Подсказки из 1С по последней активности (ЭДО, документы) — оживёт после
+   включения OData у провайдера: вернёт, например, «Подписать договор № 14». */
+async function get1cSuggestions(company, catId) {
+  return [];
+}
+function catsKb(cats) {
+  const kb = new InlineKeyboard();
+  cats.forEach((c, i) => { kb.text(c.name, "cat:" + i); if (i % 2 === 1) kb.row(); });
+  return kb;
+}
+function subsKb(catIdx, subs) {
+  const kb = new InlineKeyboard();
+  subs.forEach((s2, i) => { kb.text(s2, "sub:" + catIdx + ":" + i).row(); });
+  kb.text("✏️ Своя формулировка", "sub:" + catIdx + ":free").row();
+  kb.text("⬅️ Назад", "cat:back");
+  return kb;
+}
+
+/* ---------------- Должности и роли доверенных лиц ---------------- */
+const POSITIONS = ["👑 Директор", "💼 Владелец", "📚 Главный бухгалтер", "🧾 Бухгалтер", "📋 Менеджер", "✏️ Другое"];
+function positionsKb() {
+  const kb = new InlineKeyboard();
+  POSITIONS.forEach((p2, i) => { kb.text(p2, "pos:" + i); if (i % 2 === 1) kb.row(); });
+  return kb;
+}
+/* Доверенное лицо: телефон совпадает с карточкой клиента (внесён бухгалтером)
+   или первый зарегистрировавшийся по компании. Остальные ждут подтверждения. */
+async function resolveClientRole(u, telegramId) {
+  if (u.clientRole === "trusted") return "trusted";
+  const normC = normCompany(u.company || "");
+  if (u.phone) {
+    try {
+      const cid = await redis.get("clientphone:" + normPhone(u.phone));
+      if (cid) {
+        const c = await redis.get("client:" + cid);
+        if (c && normCompany(c.company || "") === normC) {
+          u.clientRole = "trusted";
+          await redis.set("companyowner:" + normC, telegramId);
+          return "trusted";
+        }
+      }
+    } catch (e) { /* noop */ }
+  }
+  const owner = await redis.get("companyowner:" + normC);
+  if (!owner) { await redis.set("companyowner:" + normC, telegramId); u.clientRole = "trusted"; return "trusted"; }
+  if (String(owner) === String(telegramId)) { u.clientRole = "trusted"; return "trusted"; }
+  u.clientRole = u.clientRole === "rejected" ? "rejected" : "pending";
+  return u.clientRole;
+}
+
+/* Тексты новых сценариев */
+const T2 = {
+  ru: {
+    chooseCategory: "Выберите услугу 👇",
+    chooseSub: (cat) => `${cat}\nУточните, что нужно сделать:`,
+    describeTask: (label) => `✅ ${label}\n\nОпишите детали (суммы, контрагент, сроки) и прикрепите файлы, если есть 📎`,
+    freeText: "Опишите вашу задачу свободным текстом 👇",
+    sla: (h) => `⏱ Приняли! Проведём вашу операцию в течение ${h} ч.`,
+    afterHours: (a, b) => `🕘 Приём заявок — с ${a}:00 до ${b}:00 (Ташкент). Сейчас нерабочее время.\n\nОтправить заявку на завтра или отменить?`,
+    btnDefer: "📅 Отправить на завтра",
+    deferOk: (a) => `📅 Заявка принята! Возьмём в работу завтра с ${a}:00. `,
+    askPositionTabs: "Кем вы работаете в компании? Выберите должность 👇",
+    askPositionCustom: "Напишите вашу должность ✍️",
+    pendingRole: "⏳ Ваш профиль ожидает подтверждения доверенным лицом компании. Отправлять заявки пока нельзя — мы уже отправили запрос, это быстро.",
+    rejectedRole: "🚫 Доступ к отправке заявок для этого аккаунта не подтверждён. Свяжитесь с вашим руководителем или бухгалтером.",
+    approveAsk: (name, pos, comp) => `🙋 ${name}${pos ? " (" + pos + ")" : ""} хочет отправлять заявки от компании «${comp}».\nРазрешить?`,
+    btnAllow: "✅ Разрешить",
+    btnDeny: "❌ Отклонить",
+    approvedNote: "✅ Вам разрешили отправлять заявки. Добро пожаловать!",
+    deniedNote: "🚫 Запрос на отправку заявок отклонён доверенным лицом компании.",
+    approveDone: "Готово — доступ выдан.",
+    denyDone: "Отклонено.",
+  },
+  uz: {
+    chooseCategory: "Xizmatni tanlang 👇",
+    chooseSub: (cat) => `${cat}\nAniqroq tanlang:`,
+    describeTask: (label) => `✅ ${label}\n\nTafsilotlarni yozing (summa, kontragent, muddat) va fayl biriktiring 📎`,
+    freeText: "Vazifangizni erkin matnda yozing 👇",
+    sla: (h) => `⏱ Qabul qilindi! Operatsiyangizni ${h} soat ichida bajaramiz.`,
+    afterHours: (a, b) => `🕘 Arizalar ${a}:00–${b}:00 (Toshkent) qabul qilinadi. Hozir ish vaqti emas.\n\nErtaga yuboraylikmi yoki bekor qilasizmi?`,
+    btnDefer: "📅 Ertagaga yuborish",
+    deferOk: (a) => `📅 Ariza qabul qilindi! Ertaga soat ${a}:00 dan ishga olamiz.`,
+    askPositionTabs: "Kompaniyada kim bo'lib ishlaysiz? Lavozimni tanlang 👇",
+    askPositionCustom: "Lavozimingizni yozing ✍️",
+    pendingRole: "⏳ Profilingiz kompaniya ishonchli vakili tasdig'ini kutmoqda. Hozircha ariza yuborib bo'lmaydi — so'rov yuborildi.",
+    rejectedRole: "🚫 Bu akkauntga ariza yuborish tasdiqlanmagan. Rahbaringiz yoki buxgalter bilan bog'laning.",
+    approveAsk: (name, pos, comp) => `🙋 ${name}${pos ? " (" + pos + ")" : ""} «${comp}» kompaniyasidan ariza yubormoqchi.\nRuxsat berasizmi?`,
+    btnAllow: "✅ Ruxsat berish",
+    btnDeny: "❌ Rad etish",
+    approvedNote: "✅ Sizga ariza yuborishga ruxsat berildi. Xush kelibsiz!",
+    deniedNote: "🚫 Ariza yuborish so'rovi rad etildi.",
+    approveDone: "Tayyor — ruxsat berildi.",
+    denyDone: "Rad etildi.",
+  },
+  en: {
+    chooseCategory: "Choose a service 👇",
+    chooseSub: (cat) => `${cat}\nBe more specific:`,
+    describeTask: (label) => `✅ ${label}\n\nDescribe the details (amounts, counterparty, deadlines) and attach files 📎`,
+    freeText: "Describe your task in free text 👇",
+    sla: (h) => `⏱ Got it! We'll process your operation within ${h} h.`,
+    afterHours: (a, b) => `🕘 Requests are accepted ${a}:00–${b}:00 (Tashkent). It's after hours now.\n\nSend it for tomorrow or cancel?`,
+    btnDefer: "📅 Send for tomorrow",
+    deferOk: (a) => `📅 Request accepted! We'll take it tomorrow from ${a}:00.`,
+    askPositionTabs: "What's your position at the company? 👇",
+    askPositionCustom: "Type your position ✍️",
+    pendingRole: "⏳ Your profile is awaiting confirmation by the company's trusted person. You can't send requests yet — we've sent them a request.",
+    rejectedRole: "🚫 Sending requests from this account wasn't confirmed. Contact your manager or accountant.",
+    approveAsk: (name, pos, comp) => `🙋 ${name}${pos ? " (" + pos + ")" : ""} wants to send requests for "${comp}".\nAllow?`,
+    btnAllow: "✅ Allow",
+    btnDeny: "❌ Deny",
+    approvedNote: "✅ You can now send requests. Welcome!",
+    deniedNote: "🚫 Your request was denied by the company's trusted person.",
+    approveDone: "Done — access granted.",
+    denyDone: "Denied.",
+  },
+};
+const t2of = (u) => T2[u && u.lang ? u.lang : "ru"] || T2.ru;
+
 function phoneKb(t) {
   return {
     keyboard: [[{ text: t.btnShareContact, request_contact: true }], [{ text: t.btnSkip }]],
@@ -515,7 +671,7 @@ async function afterCompanySet(ctx, u) {
   if (!u.position) {
     u.state = "position";
     await setUser(ctx.from.id, u);
-    return ctx.reply(t.askPosition, { reply_markup: { keyboard: [[{ text: t.btnSkip }]], resize_keyboard: true, one_time_keyboard: true } });
+    return ctx.reply(t2of(u).askPositionTabs, { reply_markup: positionsKb() });
   }
   u.state = u.phone ? "idle" : "phone";
   await setUser(ctx.from.id, u);
@@ -526,10 +682,12 @@ async function afterCompanySet(ctx, u) {
 async function finishOnboarding(ctx, u) {
   const t = T[u.lang];
   await notifyNewCompany(u);
+  const role = await resolveClientRole(u, ctx.from.id);
   const newPassword = await ensureClientCredentials(ctx, u);
   await upsertClient(u, ctx.from.id);
   await setUser(ctx.from.id, u);
   await ctx.reply(t.ready(u.company), { reply_markup: mainKb(u.lang) });
+  if (role === "pending") { try { await ctx.reply(t2of(u).pendingRole); } catch (e) { /* noop */ } }
   if (newPassword) {
     await sendAndPinCreds(ctx, t.crmCreds(u.authPhone, newPassword));
   } else if (u.phone && !u.pwdHash) {
@@ -832,14 +990,11 @@ bot.callbackQuery("cancel", async (ctx) => {
   return ctx.reply(T[u.lang].canceled, { reply_markup: mainKb(u.lang) });
 });
 
-bot.callbackQuery("submit", async (ctx) => {
-  const u = await getUser(ctx.from.id);
-  if (!u || !u.draft) return ctx.answerCallbackQuery();
+/* Создание задачи из черновика (вызывается из submit и defer) */
+async function createTaskFromDraft(ctx, u, deferred) {
   const t = T[u.lang];
-  if (!u.draft.text || !u.draft.text.trim()) {
-    await ctx.answerCallbackQuery();
-    return ctx.reply(t.needText);
-  }
+  const t2 = t2of(u);
+  const set = await getBotSettings();
 
   const n = await redis.incr("counter:task");
   const num = 100 + n;
@@ -848,9 +1003,12 @@ bot.callbackQuery("submit", async (ctx) => {
     client: ctx.from.id,
     company: u.company,
     text: formatSumsInText(u.draft.text),
+    category: u.draft.category || null,
+    sub: u.draft.sub || null,
     files: u.draft.files || [],
     status: "new",
     assignee: null,
+    deferred: !!deferred,
     createdAt: new Date().toISOString(),
   };
 
@@ -861,24 +1019,31 @@ bot.callbackQuery("submit", async (ctx) => {
   await logEvent("telegram", "task_created", {
     num,
     company: task.company,
+    category: task.category || null,
     from: [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(" ") + (ctx.from.username ? " @" + ctx.from.username : ""),
     files: task.files.length,
+    deferred: !!deferred,
     text: task.text.slice(0, 120),
   });
   u.state = "idle";
   u.draft = null;
   await setUser(ctx.from.id, u);
 
-  /* Подтверждение клиенту */
+  /* Подтверждение клиенту + ожидаемое время */
   await ctx.answerCallbackQuery("✅");
   const confirm = await ctx.reply(t.created(num));
   await redis.set(clientRouteKey(ctx.from.id, confirm.message_id), num);
+  try {
+    await ctx.reply(deferred ? t2.deferOk(set.workStart) : t2.sla(set.slaHours));
+  } catch (e) { /* noop */ }
 
   /* Карточка в группу бухгалтеров (без личных данных клиента) */
   try {
-    const base = `🆕 Задача №${num}\n🏢 Компания: ${task.company}\n——————————\n`;
+    const catLine = task.category ? `🗂 ${task.category}${task.sub ? " / " + task.sub : ""}\n` : "";
+    const base = `🆕 Задача №${num}\n🏢 Компания: ${task.company}\n${catLine}——————————\n`;
     const tail =
       (task.files.length ? `\n📎 Вложений: ${task.files.length}` : "") +
+      (deferred ? `\n⏸ Получена вне часов приёма — в работу с ${set.workStart}:00` : "") +
       `\n\n⚪️ Статус: Новая` +
       `\n👉 Назначьте исполнителя и статус — в CRM.`;
     const room = 3900 - base.length - tail.length;
@@ -911,6 +1076,166 @@ bot.callbackQuery("submit", async (ctx) => {
     console.error("group send:", e);
     await logEvent("telegram", "group_send_failed", { num, error: String(e).slice(0, 200) });
   }
+}
+
+/* Запрос подтверждения доверенному лицу + заявка в CRM */
+async function requestMemberApproval(ctx, u) {
+  const t2 = t2of(u);
+  const name = [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(" ") + (ctx.from.username ? " @" + ctx.from.username : "");
+  const normC = normCompany(u.company || "");
+  if (u.approvalRequested) return ctx.reply(t2.pendingRole);
+  u.approvalRequested = true;
+  await setUser(ctx.from.id, u);
+  try {
+    const id = "ar_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    await redis.lpush("access_requests", JSON.stringify({
+      id, type: "member_approve", status: "pending", at: new Date().toISOString(),
+      company: u.company, tgName: name, telegramId: ctx.from.id, position: u.position || null,
+    }));
+    await redis.ltrim("access_requests", 0, 49);
+  } catch (e) { /* noop */ }
+  try {
+    const owner = await redis.get("companyowner:" + normC);
+    if (owner) {
+      const ownerU = await getUser(owner);
+      const to2 = t2of(ownerU || u);
+      const kb = new InlineKeyboard()
+        .text(to2.btnAllow, `memb:yes:${ctx.from.id}`)
+        .text(to2.btnDeny, `memb:no:${ctx.from.id}`);
+      await bot.api.sendMessage(Number(owner), to2.approveAsk(name, u.position, u.company), { reply_markup: kb });
+    }
+  } catch (e) { /* noop */ }
+  try {
+    await sendToGroup((gid) => bot.api.sendMessage(gid,
+      `🙋 Новый сотрудник компании «${u.company}» (${name}${u.position ? ", " + u.position : ""}) просит доступ к отправке заявок. Подтвердить можно в CRM → Клиенты.`));
+  } catch (e) { /* noop */ }
+  return ctx.reply(t2.pendingRole);
+}
+
+bot.callbackQuery("submit", async (ctx) => {
+  const u = await getUser(ctx.from.id);
+  if (!u || !u.draft) return ctx.answerCallbackQuery();
+  const t = T[u.lang];
+  const t2 = t2of(u);
+  if (!u.draft.text || !u.draft.text.trim()) {
+    await ctx.answerCallbackQuery();
+    return ctx.reply(t.needText);
+  }
+
+  /* Только доверенное лицо может отправлять заявки */
+  const role = u.clientRole === "trusted-member" ? "trusted" : await resolveClientRole(u, ctx.from.id);
+  if (role === "rejected") { await ctx.answerCallbackQuery(); return ctx.reply(t2.rejectedRole); }
+  if (role === "pending") { await ctx.answerCallbackQuery(); return requestMemberApproval(ctx, u); }
+
+  /* Часы приёма заявок */
+  const set = await getBotSettings();
+  if (!inWorkHours(set)) {
+    await ctx.answerCallbackQuery();
+    const kb = new InlineKeyboard().text(t2.btnDefer, "defer").text(t.btnCancel, "cancel");
+    return ctx.reply(t2.afterHours(set.workStart, set.workEnd), { reply_markup: kb });
+  }
+
+  return createTaskFromDraft(ctx, u, false);
+});
+
+bot.callbackQuery("defer", async (ctx) => {
+  const u = await getUser(ctx.from.id);
+  if (!u || !u.draft || !u.draft.text) return ctx.answerCallbackQuery();
+  const role = u.clientRole === "trusted-member" ? "trusted" : await resolveClientRole(u, ctx.from.id);
+  if (role !== "trusted") { await ctx.answerCallbackQuery(); return requestMemberApproval(ctx, u); }
+  return createTaskFromDraft(ctx, u, true);
+});
+
+/* Разрешение/отклонение сотрудника доверенным лицом */
+bot.callbackQuery(/^memb:(yes|no):(\d+)$/, async (ctx) => {
+  const owner = await getUser(ctx.from.id);
+  if (!owner || owner.clientRole !== "trusted") return ctx.answerCallbackQuery("⛔");
+  const targetId = Number(ctx.match[2]);
+  const target = await getUser(targetId);
+  if (!target) return ctx.answerCallbackQuery("✖️");
+  if (normCompany(target.company || "") !== normCompany(owner.company || "")) return ctx.answerCallbackQuery("⛔");
+  const allow = ctx.match[1] === "yes";
+  target.clientRole = allow ? "trusted-member" : "rejected";
+  target.approvalRequested = false;
+  await setUser(targetId, target);
+  await logEvent("telegram", allow ? "member_approved" : "member_rejected", {
+    company: target.company, telegramId: targetId, by: "trusted:" + ctx.from.id,
+  });
+  const to2 = t2of(owner);
+  await ctx.answerCallbackQuery(allow ? to2.approveDone : to2.denyDone);
+  try { await ctx.editMessageReplyMarkup({ reply_markup: { inline_keyboard: [] } }); } catch (e) { /* noop */ }
+  try { await bot.api.sendMessage(targetId, allow ? t2of(target).approvedNote : t2of(target).deniedNote); } catch (e) { /* noop */ }
+});
+
+/* ---------------- Категории услуг ---------------- */
+bot.callbackQuery(/^cat:(back|\d+)$/, async (ctx) => {
+  const u = await getUser(ctx.from.id);
+  if (!u || !u.lang) return ctx.answerCallbackQuery();
+  const t2 = t2of(u);
+  const cats = await getCategories();
+  if (ctx.match[1] === "back") {
+    await ctx.answerCallbackQuery();
+    try { return ctx.editMessageText(t2.chooseCategory, { reply_markup: catsKb(cats) }); }
+    catch (e) { return ctx.reply(t2.chooseCategory, { reply_markup: catsKb(cats) }); }
+  }
+  const idx = Number(ctx.match[1]);
+  const cat = cats[idx];
+  if (!cat) return ctx.answerCallbackQuery("✖️");
+  await ctx.answerCallbackQuery();
+  const catName = String(cat.name).replace(/^[^\wа-яА-ЯёЁ]+\s*/, "");
+  const suggestions = await get1cSuggestions(u.company, cat.id);
+  const subs = [...suggestions, ...(cat.subs || [])].slice(0, 10);
+  if (!subs.length) {
+    u.state = "draft";
+    u.draft = { text: "", files: [], category: catName, sub: null };
+    await setUser(ctx.from.id, u);
+    try { return ctx.editMessageText(t2.describeTask(cat.name)); }
+    catch (e) { return ctx.reply(t2.describeTask(cat.name)); }
+  }
+  u.pendingCat = idx;
+  await setUser(ctx.from.id, u);
+  try { return ctx.editMessageText(t2.chooseSub(cat.name), { reply_markup: subsKb(idx, subs) }); }
+  catch (e) { return ctx.reply(t2.chooseSub(cat.name), { reply_markup: subsKb(idx, subs) }); }
+});
+
+bot.callbackQuery(/^sub:(\d+):(free|\d+)$/, async (ctx) => {
+  const u = await getUser(ctx.from.id);
+  if (!u || !u.lang) return ctx.answerCallbackQuery();
+  const t2 = t2of(u);
+  const cats = await getCategories();
+  const cat = cats[Number(ctx.match[1])];
+  if (!cat) return ctx.answerCallbackQuery("✖️");
+  const catName = String(cat.name).replace(/^[^\wа-яА-ЯёЁ]+\s*/, "");
+  const suggestions = await get1cSuggestions(u.company, cat.id);
+  const subs = [...suggestions, ...(cat.subs || [])].slice(0, 10);
+  const sub = ctx.match[2] === "free" ? null : subs[Number(ctx.match[2])] || null;
+  u.state = "draft";
+  u.draft = { text: sub ? sub : "", files: [], category: catName, sub };
+  delete u.pendingCat;
+  await setUser(ctx.from.id, u);
+  await ctx.answerCallbackQuery();
+  const label = sub ? cat.name + " → " + sub : cat.name;
+  try { return ctx.editMessageText(t2.describeTask(label)); }
+  catch (e) { return ctx.reply(t2.describeTask(label)); }
+});
+
+/* Выбор должности табами при регистрации */
+bot.callbackQuery(/^pos:(\d+)$/, async (ctx) => {
+  const u = await getUser(ctx.from.id);
+  if (!u || u.state !== "position") return ctx.answerCallbackQuery();
+  const t2 = t2of(u);
+  const idx = Number(ctx.match[1]);
+  await ctx.answerCallbackQuery();
+  if (idx === POSITIONS.length - 1) {
+    /* «Другое» — вводит текстом, state остаётся position */
+    return ctx.reply(t2.askPositionCustom);
+  }
+  u.position = POSITIONS[idx].replace(/^[^\wа-яА-ЯёЁ]+\s*/, "");
+  u.state = u.phone ? "idle" : "phone";
+  await setUser(ctx.from.id, u);
+  try { await ctx.editMessageReplyMarkup({ reply_markup: { inline_keyboard: [] } }); } catch (e) { /* noop */ }
+  if (u.state === "idle") return finishOnboarding(ctx, u);
+  return ctx.reply(T[u.lang].askPhone, { reply_markup: phoneKb(T[u.lang]) });
 });
 
 /* ---------------- Кнопки в группе (устарело) ----------------
@@ -1075,7 +1400,8 @@ bot.on("message", async (ctx) => {
       if (plain === M.newTask) {
         u.state = "idle"; u.draft = null;
         await setUser(ctx.from.id, u);
-        return ctx.reply(t.idleHint, { reply_markup: mainKb(u.lang) });
+        const cats = await getCategories();
+        return ctx.reply(t2of(u).chooseCategory, { reply_markup: catsKb(cats) });
       }
       if (plain === M.myTasks) return listTasks(ctx, u);
       if (plain === M.lang) return ctx.reply(HELLO, { reply_markup: LANG_KB });

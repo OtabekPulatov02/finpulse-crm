@@ -205,6 +205,9 @@ function safeTask(t) {
     company: t.company,
     text: t.text,
     status: t.status,
+    category: t.category || null,
+    sub: t.sub || null,
+    deferred: !!t.deferred,
     assignee: t.assignee || null,
     createdAt: t.createdAt || null,
     files: Array.isArray(t.files) ? t.files.length : 0,
@@ -1162,7 +1165,14 @@ async function resolveAccessRequest(id, approve, actor) {
 
   let issuedPassword = null;
   if (approve) {
-    if (reqObj.type === "telegram_rebind") {
+    if (reqObj.type === "member_approve") {
+      const u = await redis.get("user:" + reqObj.telegramId);
+      if (!u) return { ok: false, error: "bot user not found" };
+      u.clientRole = "trusted-member";
+      u.approvalRequested = false;
+      await redis.set("user:" + reqObj.telegramId, u);
+      await tg("sendMessage", { chat_id: reqObj.telegramId, text: "✅ Вам разрешили отправлять заявки от компании «" + (reqObj.company || "") + "». Добро пожаловать!" });
+    } else if (reqObj.type === "telegram_rebind") {
       const client = reqObj.clientId ? await redis.get("client:" + reqObj.clientId) : null;
       if (!client) return { ok: false, error: "client card not found" };
       client.telegramId = reqObj.telegramId;
@@ -1189,6 +1199,12 @@ async function resolveAccessRequest(id, approve, actor) {
       });
     }
   } else {
+    if (reqObj.type === "member_approve") {
+      try {
+        const u = await redis.get("user:" + reqObj.telegramId);
+        if (u) { u.clientRole = "rejected"; u.approvalRequested = false; await redis.set("user:" + reqObj.telegramId, u); }
+      } catch (e) { /* noop */ }
+    }
     try {
       await tg("sendMessage", { chat_id: reqObj.telegramId, text: "❌ Бухгалтерия не подтвердила доступ по компании «" + (reqObj.company || "") + "». Если это ошибка — свяжитесь с вашим бухгалтером." });
     } catch (e) { /* noop */ }
@@ -1247,6 +1263,17 @@ module.exports = async (req, res) => {
         const rows = (await redis.lrange("logs:" + src, 0, 199)) || [];
         const logs = rows.map((r) => { try { return typeof r === "string" ? JSON.parse(r) : r; } catch { return null; } }).filter(Boolean);
         return res.status(200).json({ ok: true, src, logs });
+      }
+      if (q.r === "bot_settings") {
+        if (!isStaff) return res.status(403).json({ ok: false, error: "forbidden" });
+        const def = { slaHours: 3, workStart: 9, workEnd: 16, tzOffset: 5 };
+        const cur = (await redis.get("bot:settings")) || {};
+        return res.status(200).json({ ok: true, settings: { ...def, ...cur } });
+      }
+      if (q.r === "bot_categories") {
+        if (!isStaff) return res.status(403).json({ ok: false, error: "forbidden" });
+        const cats = (await redis.get("bot:categories")) || null;
+        return res.status(200).json({ ok: true, categories: cats });
       }
       if (q.r === "tariffs") {
         return res.status(200).json({ ok: true, tariffs: await getTariffs() });
@@ -1388,6 +1415,36 @@ module.exports = async (req, res) => {
          isStaff (или isAdmin для деструктивных действий). */
       if (!isStaff && !isClient && !isGuest) return res.status(403).json({ ok: false, error: "forbidden" });
 
+      if (body && body.action === "bot_settings_save" && body.settings) {
+        const isAdmin = !rolesEnforced || (authUser && authUser.role === "admin");
+        if (!isAdmin) return res.status(403).json({ ok: false, error: "admin only" });
+        const b = body.settings;
+        const clean = {
+          slaHours: Math.min(72, Math.max(1, Number(b.slaHours) || 3)),
+          workStart: Math.min(23, Math.max(0, Number(b.workStart) || 9)),
+          workEnd: Math.min(24, Math.max(1, Number(b.workEnd) || 16)),
+          tzOffset: 5,
+        };
+        if (clean.workEnd <= clean.workStart) return res.status(200).json({ ok: false, error: "конец окна должен быть позже начала" });
+        await redis.set("bot:settings", clean);
+        await logEvent("crm", "bot_settings_updated", { ...clean, by: (authUser && authUser.name) || "CRM" });
+        return res.status(200).json({ ok: true, settings: clean });
+      }
+      if (body && body.action === "bot_categories_save" && Array.isArray(body.categories)) {
+        const isAdmin = !rolesEnforced || (authUser && authUser.role === "admin");
+        if (!isAdmin) return res.status(403).json({ ok: false, error: "admin only" });
+        const clean = body.categories
+          .filter((c) => c && c.name)
+          .slice(0, 15)
+          .map((c, i) => ({
+            id: String(c.id || "cat" + i).slice(0, 20),
+            name: String(c.name).slice(0, 50),
+            subs: Array.isArray(c.subs) ? c.subs.map((x) => String(x).slice(0, 60)).filter(Boolean).slice(0, 10) : [],
+          }));
+        await redis.set("bot:categories", clean);
+        await logEvent("crm", "bot_categories_updated", { count: clean.length, by: (authUser && authUser.name) || "CRM" });
+        return res.status(200).json({ ok: true, categories: clean });
+      }
       if (body && body.action === "tariffs_save" && Array.isArray(body.tariffs)) {
         const isAdmin = !rolesEnforced || (authUser && authUser.role === "admin");
         if (!isAdmin) return res.status(403).json({ ok: false, error: "admin only" });
