@@ -60,10 +60,6 @@ async function tgToGroup(method, payload) {
   return resp;
 }
 
-/* Компания по умолчанию для напоминаний без конкретного клиента ("Все
-   клиенты") — должна совпадать с DEFAULT_REMINDER_COMPANY в api/crm.js. */
-const DEFAULT_REMINDER_COMPANY = "OOO Finpulse";
-
 function normCompany(str) {
   return String(str || "")
     .toLowerCase()
@@ -192,11 +188,15 @@ async function processCalendarEvents(todayStr) {
     const due = todayStr >= remindFrom;
 
     if (due && ev.taskCreatedFor !== ev.date) {
-      try {
-        /* Общие напоминания без company ("Все клиенты") заводим на
-           внутреннюю компанию фирмы — как и в ensureDueReminderTasks()
-           в api/crm.js. */
-        const evCompany = ev.company || DEFAULT_REMINDER_COMPANY;
+      /* Общий SETNX-лок с ensureDueReminderTasks() из api/crm.js — не
+         даёт крону и "живому" листенеру создать дубликат, если оба
+         сработают почти одновременно. */
+      const lockKey = `reminderlock:${ev.id}:${ev.date}`;
+      const acquired = await redis.set(lockKey, "1", { nx: true, ex: 60 });
+      if (acquired) try {
+        /* Напоминания — отдельный тип задач без company, как и в
+           ensureDueReminderTasks() в api/crm.js. */
+        const evCompany = ev.company || null;
         const n = await redis.incr("counter:task");
         const num = 100 + n;
         const label = ev.type === "tax" ? "Налог/отчёт" : "Платёж";
@@ -212,14 +212,17 @@ async function processCalendarEvents(todayStr) {
           source: "crm",
           dueDate: ev.date,
           fromCalendarEvent: ev.id,
+          type: "reminder",
         };
-        try {
-          const clientId = await redis.get("clientcompany:" + normCompany(evCompany));
-          if (clientId) {
-            const cl = await redis.get("client:" + clientId);
-            if (cl && cl.telegramId) task.client = cl.telegramId;
-          }
-        } catch (e) { /* клиента не нашли — задача всё равно создаётся, просто без привязки к Telegram-аккаунту */ }
+        if (evCompany) {
+          try {
+            const clientId = await redis.get("clientcompany:" + normCompany(evCompany));
+            if (clientId) {
+              const cl = await redis.get("client:" + clientId);
+              if (cl && cl.telegramId) task.client = cl.telegramId;
+            }
+          } catch (e) { /* клиента не нашли — задача всё равно создаётся, просто без привязки к Telegram-аккаунту */ }
+        }
 
         await redis.set("task:" + num, task);
         await redis.sadd("tasks:withdue", num);
@@ -229,7 +232,9 @@ async function processCalendarEvents(todayStr) {
         }
 
         const header =
-          `🆕 Задача №${num}\n🏢 Компания: ${evCompany}\n——————————\n` +
+          `🔔 Напоминание №${num}` +
+          (evCompany ? `\n🏢 Компания: ${evCompany}` : "") +
+          `\n——————————\n` +
           `${task.text}\n\n⚪️ Статус: Новая\n👉 Назначьте исполнителя и статус — в CRM.`;
         const sent = await tgToGroup("sendMessage", { text: header });
         if (sent && sent.ok && sent.result && sent.result.message_id) {
@@ -239,7 +244,7 @@ async function processCalendarEvents(todayStr) {
 
         ev.taskCreatedFor = ev.date;
         tasksCreated++;
-        await logEvent("cron", "task_created_from_reminder", { num, eventId: ev.id, company: ev.company, dueDate: ev.date });
+        await logEvent("cron", "task_created_from_reminder", { num, eventId: ev.id, company: evCompany, dueDate: ev.date });
       } catch (e) { /* задача не критична для самого напоминания */ }
     }
 

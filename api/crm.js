@@ -144,16 +144,19 @@ const MSG = {
     assigned: (n, name) => `👩‍💼 По задаче №${n} назначен бухгалтер: ${name}. Уже в работе!`,
     done: (n) => `✅ Задача №${n} выполнена. Если что-то ещё — просто напишите 👇`,
     reopened: (n) => `🔄 Задача №${n} возвращена в работу.`,
+    cancelled: (n) => `🚫 Задача №${n} отменена.`,
   },
   uz: {
     assigned: (n, name) => `👩‍💼 №${n} vazifaga buxgalter tayinlandi: ${name}. Ishga tushdi!`,
     done: (n) => `✅ №${n} vazifa bajarildi. Yana savol bo'lsa — yozing 👇`,
     reopened: (n) => `🔄 №${n} vazifa qayta ishga qaytarildi.`,
+    cancelled: (n) => `🚫 №${n} vazifa bekor qilindi.`,
   },
   en: {
     assigned: (n, name) => `👩‍💼 Task #${n} was assigned to accountant: ${name}. Work has started!`,
     done: (n) => `✅ Task #${n} is done. Anything else — just write 👇`,
     reopened: (n) => `🔄 Task #${n} was reopened.`,
+    cancelled: (n) => `🚫 Task #${n} was cancelled.`,
   },
 };
 
@@ -165,6 +168,7 @@ const STATUS_LINE = {
   new: "⚪️ Статус: Новая",
   in_progress: "🔵 Статус: В работе",
   done: "🟢 Статус: Выполнена",
+  cancelled: "🚫 Статус: Отменено",
 };
 
 async function logEvent(source, event, data) {
@@ -190,6 +194,9 @@ function safeTask(t) {
     dueDate: t.dueDate || null,
     source: t.source === "crm" ? "crm" : "bot",
     doneAt: t.doneAt || null,
+    /* "task" — обычная задача, "reminder" — авто-созданная из календаря
+       (налог/платёж); у напоминаний нет company. */
+    type: t.type === "reminder" ? "reminder" : "task",
   };
 }
 
@@ -478,10 +485,11 @@ async function listTasks() {
   return rows.filter(Boolean).map(safeTask);
 }
 
-async function createTaskFromCrm({ clientId, company, text, assignee, dueDate }, actor) {
+async function createTaskFromCrm({ clientId, company, text, assignee, dueDate, type }, actor) {
   const cleanText = formatSumsInText(String(text || "").trim());
   if (!cleanText) return { ok: false, error: "text required" };
   const cleanDue = /^\d{4}-\d{2}-\d{2}$/.test(String(dueDate || "")) ? dueDate : null;
+  const taskType = type === "reminder" ? "reminder" : "task";
 
   let telegramId = null;
   let finalCompany = company || null;
@@ -491,7 +499,9 @@ async function createTaskFromCrm({ clientId, company, text, assignee, dueDate },
     telegramId = c.telegramId || null;
     finalCompany = c.company;
   }
-  if (!finalCompany || !String(finalCompany).trim()) {
+  /* У напоминаний company может отсутствовать ("Все клиенты") — это
+     осознанно допустимо. Для обычных задач company обязательна. */
+  if (taskType !== "reminder" && (!finalCompany || !String(finalCompany).trim())) {
     return { ok: false, error: "company required" };
   }
 
@@ -500,7 +510,7 @@ async function createTaskFromCrm({ clientId, company, text, assignee, dueDate },
   const task = {
     num,
     client: telegramId,
-    company: finalCompany,
+    company: finalCompany || null,
     text: cleanText,
     files: [],
     status: assignee ? "in_progress" : "new",
@@ -508,6 +518,7 @@ async function createTaskFromCrm({ clientId, company, text, assignee, dueDate },
     createdAt: new Date().toISOString(),
     source: "crm",
     dueDate: cleanDue,
+    type: taskType,
   };
   await redis.set("task:" + num, task);
   if (cleanDue) await redis.sadd("tasks:withdue", num);
@@ -515,12 +526,12 @@ async function createTaskFromCrm({ clientId, company, text, assignee, dueDate },
     await redis.lpush("utasks:" + telegramId, num);
     await redis.ltrim("utasks:" + telegramId, 0, 19);
   }
-  await logEvent("crm", "task_created", { num, company: finalCompany, clientId: clientId || null, by: actor || "CRM" });
+  await logEvent("crm", "task_created", { num, company: finalCompany || null, clientId: clientId || null, by: actor || "CRM" });
 
   /* Карточка в группе бухгалтеров — тот же формат, что и у карточек из бота */
   try {
     const header =
-      `🆕 Задача №${num}\n🏢 Компания: ${finalCompany}\n——————————\n` +
+      `🆕 Задача №${num}\n🏢 Компания: ${finalCompany || "—"}\n——————————\n` +
       `${cleanText.slice(0, 3600)}\n\n` +
       `${STATUS_LINE[task.status] || task.status}` +
       (task.assignee ? `\n👩‍💼 Исполнитель: ${task.assignee}` : "") +
@@ -719,7 +730,7 @@ const CE_REPEATS = ["once", "monthly", "quarterly", "yearly"];
 const CE_REMIND_OPTIONS = [0, 1, 3, 7];
 /* Компания по умолчанию для напоминаний без конкретного клиента ("Все
    клиенты") — Task обязательно должна быть привязана к компании. */
-const DEFAULT_REMINDER_COMPANY = "OOO Finpulse";
+
 
 function addDaysStr(dateStr, n) {
   const [y, m, d] = dateStr.split("-").map(Number);
@@ -765,12 +776,22 @@ async function ensureDueReminderTasks() {
       let changed = false;
 
       if (due && ev.taskCreatedFor !== ev.date) {
-        try {
-          /* Общие напоминания ("Все клиенты", company не задана) раньше
-             вообще не превращались в задачу — у Task обязательно должна
-             быть компания. Теперь заводим их на внутреннюю компанию
-             самой фирмы, чтобы такие дела тоже попадали в канбан. */
-          const evCompany = ev.company || DEFAULT_REMINDER_COMPANY;
+        /* ensureDueReminderTasks() запускается на каждый GET r=tasks /
+           r=calendar_events — если CRM открыта в двух вкладках или два
+           запроса пришли почти одновременно, оба могли прочитать
+           ev.taskCreatedFor как "ещё не создано" ДО того, как первый
+           успеет дозаписать redis (между чтением и записью проходит
+           обращение к Telegram API — сотни мс, этого достаточно для
+           гонки). Из-за этого одно и то же напоминание дублировалось в
+           задачах. Лок на основе SETNX гарантирует, что задачу создаст
+           только один из параллельных запросов. */
+        const lockKey = `reminderlock:${ev.id}:${ev.date}`;
+        const acquired = await redis.set(lockKey, "1", { nx: true, ex: 60 });
+        if (acquired) try {
+          /* Напоминания — отдельный тип задач без company ("Все клиенты"
+             тоже не привязаны к конкретной компании). Это осознанное
+             решение: напоминание не про конкретного клиента. */
+          const evCompany = ev.company || null;
           const n = await redis.incr("counter:task");
           const num = 100 + n;
           const label = ev.type === "tax" ? "Налог/отчёт" : "Платёж";
@@ -779,15 +800,17 @@ async function ensureDueReminderTasks() {
             text: `${label}: ${ev.title} (срок ${ev.date})`,
             files: [], status: "new", assignee: null,
             createdAt: new Date().toISOString(), source: "crm",
-            dueDate: ev.date, fromCalendarEvent: ev.id,
+            dueDate: ev.date, fromCalendarEvent: ev.id, type: "reminder",
           };
-          try {
-            const clientId = await redis.get("clientcompany:" + normCompany(evCompany));
-            if (clientId) {
-              const cl = await redis.get("client:" + clientId);
-              if (cl && cl.telegramId) task.client = cl.telegramId;
-            }
-          } catch (e2) { /* клиента не нашли — задача создаётся без привязки к Telegram-аккаунту */ }
+          if (evCompany) {
+            try {
+              const clientId = await redis.get("clientcompany:" + normCompany(evCompany));
+              if (clientId) {
+                const cl = await redis.get("client:" + clientId);
+                if (cl && cl.telegramId) task.client = cl.telegramId;
+              }
+            } catch (e2) { /* клиента не нашли — задача создаётся без привязки к Telegram-аккаунту */ }
+          }
 
           await redis.set("task:" + num, task);
           await redis.sadd("tasks:withdue", num);
@@ -798,7 +821,9 @@ async function ensureDueReminderTasks() {
 
           try {
             const header =
-              `🆕 Задача №${num}\n🏢 Компания: ${evCompany}\n——————————\n` +
+              `🔔 Напоминание №${num}` +
+              (evCompany ? `\n🏢 Компания: ${evCompany}` : "") +
+              `\n——————————\n` +
               `${task.text}\n\n⚪️ Статус: Новая\n👉 Назначьте исполнителя и статус — в CRM.`;
             const sent = await tgToGroup("sendMessage", { text: header });
             if (sent && sent.ok && sent.result && sent.result.message_id) {
@@ -932,6 +957,7 @@ async function updateStatus(num, status, assignee) {
       const m = MSG[(u && u.lang) || "ru"];
       const text =
         status === "done" ? m.done(num)
+        : status === "cancelled" ? m.cancelled(num)
         : status === "in_progress" ? m.assigned(num, task.assignee || "бухгалтер")
         : m.reopened(num);
       await tg("sendMessage", { chat_id: task.client, text });
@@ -1110,7 +1136,7 @@ module.exports = async (req, res) => {
 
       if (body && body.action === "status" && body.num && body.status) {
         if (!isStaff) return res.status(403).json({ ok: false, error: "forbidden" });
-        if (!["new", "in_progress", "done"].includes(body.status)) {
+        if (!["new", "in_progress", "done", "cancelled"].includes(body.status)) {
           return res.status(200).json({ ok: false, error: "bad status" });
         }
         const r = await updateStatus(Number(body.num), body.status, body.assignee);
