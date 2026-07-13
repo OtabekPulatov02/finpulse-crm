@@ -74,16 +74,33 @@ const ALLOWED_ORIGINS = (process.env.CRM_ALLOWED_ORIGINS || "")
   .map((s) => s.trim())
   .filter(Boolean);
 
+if (!ALLOWED_ORIGINS.length) {
+  console.warn("SECURITY: CRM_ALLOWED_ORIGINS не задан — CORS отражает любой Origin (эффективно без ограничения).");
+}
+if (API_KEY && API_KEY.length < 32) {
+  console.warn("SECURITY: CRM_API_KEY короче 32 символов — увеличьте длину секрета.");
+}
+
 function resolveOrigin(req) {
   const origin = req.headers.origin || "";
   if (!ALLOWED_ORIGINS.length) return origin || "*"; // список ещё не настроен — не ломаем текущую работу
   return ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0];
 }
 
+/* Сравнение за постоянное время — обычное === для сравнения секретов
+   теоретически позволяет измерять тайминг посимвольного сравнения.
+   timingSafeEqual требует буферы одинаковой длины, поэтому сначала явно
+   проверяем длину (длина ключа сама по себе не секрет). */
+function timingSafeStringEqual(a, b) {
+  const bufA = Buffer.from(String(a || ""), "utf8");
+  const bufB = Buffer.from(String(b || ""), "utf8");
+  if (bufA.length !== bufB.length) return false;
+  try { return crypto.timingSafeEqual(bufA, bufB); } catch { return false; }
+}
+
 function checkApiKey(req) {
   if (!API_KEY) return true; // ключ ещё не задан в env — пропускаем (переходный период)
-  const provided = req.headers["x-api-key"];
-  return provided === API_KEY;
+  return timingSafeStringEqual(req.headers["x-api-key"], API_KEY);
 }
 
 /* --- Роли (JWT из /api/auth) -----------------------------------------
@@ -95,12 +112,15 @@ function checkApiKey(req) {
    менять статус). ------------------------------------------------------- */
 const jwt = require("jsonwebtoken");
 const JWT_SECRET = process.env.JWT_SECRET || "";
+if (JWT_SECRET && JWT_SECRET.length < 32) {
+  console.warn("SECURITY: JWT_SECRET короче 32 символов — увеличьте длину секрета.");
+}
 
 function getAuthUser(req) {
   const h = req.headers.authorization || "";
   const m = /^Bearer\s+(.+)$/i.exec(h);
   if (!m || !JWT_SECRET) return null;
-  try { return jwt.verify(m[1], JWT_SECRET); } catch { return null; }
+  try { return jwt.verify(m[1], JWT_SECRET, { algorithms: ["HS256"] }); } catch { return null; }
 }
 
 const DEMO_TASKS = [
@@ -534,32 +554,34 @@ async function createTaskFromCrm({ clientId, company, text, assignee, dueDate, t
   }
   await logEvent("crm", "task_created", { num, company: finalCompany || null, clientId: clientId || null, by: actor || "CRM" });
 
-  /* Карточка в группе бухгалтеров — тот же формат, что и у карточек из бота */
-  try {
-    const header =
-      `🆕 Задача №${num}\n🏢 Компания: ${finalCompany || "—"}\n——————————\n` +
-      `${cleanText.slice(0, 3600)}\n\n` +
-      `${STATUS_LINE[task.status] || task.status}` +
-      (task.assignee ? `\n👩‍💼 Исполнитель: ${task.assignee}` : "") +
-      `\n✍️ Заведена из CRM: ${actor || "CRM"}` +
-      (task.status === "new" ? `\n👉 Назначьте исполнителя и статус — в CRM.` : "");
-    const sent = await tgToGroup("sendMessage", { text: header });
-    if (sent && sent.ok && sent.result && sent.result.message_id) {
-      task.gmsg = sent.result.message_id;
-      await redis.set("task:" + num, task);
-    } else if (!sent || !sent.ok) {
-      await logEvent("crm", "group_card_failed", { num, reason: (sent && sent.description) || "unknown" });
-    }
-  } catch (e) { /* карточка не критична */ }
+  /* Карточка в группе бухгалтеров и личное уведомление клиенту — два
+     независимых похода в Telegram API, отправляем их параллельно вместо
+     последовательного ожидания (клиентское уведомление ещё и требует
+     отдельного чтения user:<id> для языка — это тоже не блокирует
+     отправку карточки в группу). */
+  const header =
+    `🆕 Задача №${num}\n🏢 Компания: ${finalCompany || "—"}\n——————————\n` +
+    `${cleanText.slice(0, 3600)}\n\n` +
+    `${STATUS_LINE[task.status] || task.status}` +
+    (task.assignee ? `\n👩‍💼 Исполнитель: ${task.assignee}` : "") +
+    `\n✍️ Заведена из CRM: ${actor || "CRM"}` +
+    (task.status === "new" ? `\n👉 Назначьте исполнителя и статус — в CRM.` : "");
 
-  /* Уведомляем клиента в его языке, если он привязан к телеграму */
-  try {
-    if (telegramId) {
-      const u = await redis.get("user:" + telegramId);
-      const lang = (u && u.lang) || "ru";
-      await tg("sendMessage", { chat_id: telegramId, text: MSG[lang].createdByCrm(num, cleanText) });
-    }
-  } catch (e) { /* noop */ }
+  const groupPromise = tgToGroup("sendMessage", { text: header }).catch(() => null);
+  const clientPromise = telegramId
+    ? redis.get("user:" + telegramId)
+        .then((u) => (u && u.lang) || "ru")
+        .then((lang) => tg("sendMessage", { chat_id: telegramId, text: MSG[lang].createdByCrm(num, cleanText) }))
+        .catch(() => null)
+    : Promise.resolve(null);
+
+  const [sent] = await Promise.all([groupPromise, clientPromise]);
+  if (sent && sent.ok && sent.result && sent.result.message_id) {
+    task.gmsg = sent.result.message_id;
+    await redis.set("task:" + num, task);
+  } else if (!sent || !sent.ok) {
+    await logEvent("crm", "group_card_failed", { num, reason: (sent && sent.description) || "unknown" });
+  }
 
   return { ok: true, task: safeTask(task) };
 }
@@ -838,6 +860,17 @@ function advanceDateStr(dateStr, repeat) {
    уведомление. */
 async function ensureDueReminderTasks() {
   try {
+    /* ensureDueReminderTasks() запускается на каждый GET r=tasks /
+       r=calendar_events — с учётом live-поллинга на фронте (раз в 7с на
+       вкладку) это может означать десятки вызовов в минуту при нескольких
+       открытых вкладках, хотя события календаря меняются редко. Простой
+       SETNX-guard с коротким TTL ограничивает реальную работу (чтение +
+       разбор всех событий) одним разом за FRESHNESS_SEC, вне зависимости
+       от того, сколько запросов пришло за это время. */
+    const FRESHNESS_SEC = 20;
+    const fresh = await redis.set("reminderscheck:guard", "1", { nx: true, ex: FRESHNESS_SEC });
+    if (!fresh) return;
+
     const ids = (await redis.smembers("calendarevents")) || [];
     if (!ids.length) return;
     const keys = ids.map((id) => "calendarevent:" + id);
@@ -1012,33 +1045,37 @@ async function updateStatus(num, status, assignee) {
     assignee: task.assignee || null, by: assignee || "CRM",
   });
 
-  /* Обновляем карточку в группе бухгалтеров */
-  try {
-    if (task.gmsg) {
-      const header =
-        `🆕 Задача №${num}\n🏢 Компания: ${task.company}\n——————————\n` +
-        `${String(task.text).slice(0, 3600)}` +
-        (task.files && task.files.length ? `\n📎 Вложений: ${task.files.length}` : "") +
-        `\n\n${STATUS_LINE[status] || status}` +
-        (task.assignee && status !== "new" ? `\n👩‍💼 Исполнитель: ${task.assignee}` : "") +
-        (status === "new" ? `\n👉 Назначьте исполнителя и статус — в CRM.` : "");
-      await tgToGroup("editMessageText", { message_id: task.gmsg, text: header });
-    }
-  } catch (e) { /* карточки может не быть — не критично */ }
+  /* Обновление карточки в группе и уведомление клиента — независимые
+     похода в Telegram, отправляем параллельно вместо последовательного
+     ожидания. */
+  const groupPromise = task.gmsg
+    ? (() => {
+        const header =
+          `🆕 Задача №${num}\n🏢 Компания: ${task.company}\n——————————\n` +
+          `${String(task.text).slice(0, 3600)}` +
+          (task.files && task.files.length ? `\n📎 Вложений: ${task.files.length}` : "") +
+          `\n\n${STATUS_LINE[status] || status}` +
+          (task.assignee && status !== "new" ? `\n👩‍💼 Исполнитель: ${task.assignee}` : "") +
+          (status === "new" ? `\n👉 Назначьте исполнителя и статус — в CRM.` : "");
+        return tgToGroup("editMessageText", { message_id: task.gmsg, text: header }).catch(() => null);
+      })()
+    : Promise.resolve(null);
 
-  /* Уведомляем клиента */
-  try {
-    if (task.client && prev !== status) {
-      const u = await redis.get("user:" + task.client);
-      const m = MSG[(u && u.lang) || "ru"];
-      const text =
-        status === "done" ? m.done(num)
-        : status === "cancelled" ? m.cancelled(num)
-        : status === "in_progress" ? m.assigned(num, task.assignee || "бухгалтер")
-        : m.reopened(num);
-      await tg("sendMessage", { chat_id: task.client, text });
-    }
-  } catch (e) { /* noop */ }
+  const clientPromise = (task.client && prev !== status)
+    ? redis.get("user:" + task.client)
+        .then((u) => MSG[(u && u.lang) || "ru"])
+        .then((m) => {
+          const text =
+            status === "done" ? m.done(num)
+            : status === "cancelled" ? m.cancelled(num)
+            : status === "in_progress" ? m.assigned(num, task.assignee || "бухгалтер")
+            : m.reopened(num);
+          return tg("sendMessage", { chat_id: task.client, text });
+        })
+        .catch(() => null)
+    : Promise.resolve(null);
+
+  await Promise.all([groupPromise, clientPromise]);
 
   return { ok: true, task: safeTask(task) };
 }
@@ -1107,11 +1144,14 @@ module.exports = async (req, res) => {
       }
       if (q.r === "client") {
         if (!q.id) return res.status(200).json({ ok: false, error: "id required" });
-        const c = await redis.get("client:" + q.id);
-        if (!c) return res.status(404).json({ ok: false, error: "not found" });
+        /* Гостю отдаём демо-карточку без похода в Redis вообще — иначе
+           ответ 200(demo)/404(not found) превращается в оракул "существует
+           ли такой id" для неаутентифицированного/демо-доступа. */
         if (rolesEnforced && authUser.role === "guest") {
           return res.status(200).json({ ok: true, client: DEMO_CLIENT });
         }
+        const c = await redis.get("client:" + q.id);
+        if (!c) return res.status(404).json({ ok: false, error: "not found" });
         if (rolesEnforced && authUser.role === "client") {
           if (normCompany(c.company) !== normCompany(authUser.company || "")) {
             return res.status(403).json({ ok: false, error: "forbidden" });

@@ -32,14 +32,60 @@ const ALLOWED_ORIGINS = (process.env.CRM_ALLOWED_ORIGINS || "")
   .map((s) => s.trim())
   .filter(Boolean);
 
+/* Слабые/незаданные секреты — предупреждаем в логах Vercel, но не роняем
+   функцию (чтобы не сломать прод, если секрет уже короче рекомендуемого
+   и это заметят только сейчас). */
+if (JWT_SECRET && JWT_SECRET.length < 32) {
+  console.warn("SECURITY: JWT_SECRET короче 32 символов — увеличьте длину секрета.");
+}
+if (process.env.BOOTSTRAP_ADMIN_SECRET && process.env.BOOTSTRAP_ADMIN_SECRET.length < 20) {
+  console.warn("SECURITY: BOOTSTRAP_ADMIN_SECRET короче 20 символов — увеличьте длину секрета.");
+}
+
 function resolveOrigin(req) {
   const origin = req.headers.origin || "";
   if (!ALLOWED_ORIGINS.length) return origin || "*";
   return ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0];
 }
+
+/* Сравнение секретов за постоянное время — обычное ===/!== для
+   bearer-подобных значений (API-ключ, bootstrap-секрет) теоретически
+   позволяет измерять тайминг посимвольного сравнения. timingSafeEqual
+   требует буферы одинаковой длины, поэтому сначала выравниваем через
+   отдельную проверку длины (сама эта проверка не секрет — длина ключа
+   не является чувствительной информацией). */
+function timingSafeStringEqual(a, b) {
+  const bufA = Buffer.from(String(a || ""), "utf8");
+  const bufB = Buffer.from(String(b || ""), "utf8");
+  if (bufA.length !== bufB.length) return false;
+  try { return crypto.timingSafeEqual(bufA, bufB); } catch { return false; }
+}
+
 function checkApiKey(req) {
   if (!API_KEY) return true;
-  return req.headers["x-api-key"] === API_KEY;
+  return timingSafeStringEqual(req.headers["x-api-key"], API_KEY);
+}
+
+/* --- Простая защита от подбора пароля: не более MAX_ATTEMPTS неудачных
+   попыток логина на один identity за WINDOW_SEC секунд. Считаем именно
+   по identity (телефон/логин), а не по IP — в serverless-окружении Vercel
+   IP-заголовки (x-forwarded-for) не всегда надёжны/уникальны, а identity
+   даёт прямую защиту от подбора пароля к конкретному аккаунту. */
+const LOGIN_MAX_ATTEMPTS = 8;
+const LOGIN_WINDOW_SEC = 10 * 60;
+async function isLoginLocked(identity) {
+  const key = "loginattempts:" + String(identity || "").toLowerCase();
+  const n = Number((await redis.get(key)) || 0);
+  return n >= LOGIN_MAX_ATTEMPTS;
+}
+async function registerFailedLogin(identity) {
+  const key = "loginattempts:" + String(identity || "").toLowerCase();
+  const n = await redis.incr(key);
+  if (n === 1) await redis.expire(key, LOGIN_WINDOW_SEC);
+}
+async function clearFailedLogins(identity) {
+  const key = "loginattempts:" + String(identity || "").toLowerCase();
+  await redis.del(key);
 }
 function normPhone(p) {
   return String(p || "").replace(/[^\d+]/g, "");
@@ -51,7 +97,7 @@ function sign(payload, ttl) {
 }
 function verify(token) {
   if (!JWT_SECRET) return null;
-  try { return jwt.verify(token, JWT_SECRET); } catch { return null; }
+  try { return jwt.verify(token, JWT_SECRET, { algorithms: ["HS256"] }); } catch { return null; }
 }
 function getBearer(req) {
   const h = req.headers.authorization || "";
@@ -96,7 +142,7 @@ module.exports = async (req, res) => {
 
       if (body.action === "bootstrap_admin") {
         const secret = req.headers["x-bootstrap-secret"];
-        if (!process.env.BOOTSTRAP_ADMIN_SECRET || secret !== process.env.BOOTSTRAP_ADMIN_SECRET) {
+        if (!process.env.BOOTSTRAP_ADMIN_SECRET || !timingSafeStringEqual(secret, process.env.BOOTSTRAP_ADMIN_SECRET)) {
           return res.status(401).json({ ok: false, error: "unauthorized" });
         }
         const existing = (await redis.smembers("employees")) || [];
@@ -122,6 +168,15 @@ module.exports = async (req, res) => {
           return res.status(200).json({ ok: false, error: "identity and password required" });
         }
 
+        /* Защита от подбора пароля: если по этому identity уже было слишком
+           много неудачных попыток за последние LOGIN_WINDOW_SEC — не даём
+           даже проверить пароль (иначе bcrypt.compareSync всё равно тратит
+           время и подтверждает, что аккаунт существует). */
+        const lockKey = String(identity).toLowerCase();
+        if (await isLoginLocked(lockKey)) {
+          return res.status(429).json({ ok: false, error: "too many attempts, try again later" });
+        }
+
         /* 1) Пробуем клиента по телефону */
         const phone = normPhone(identity);
         if (phone) {
@@ -129,6 +184,7 @@ module.exports = async (req, res) => {
           if (telegramId) {
             const u = await redis.get("user:" + telegramId);
             if (u && u.pwdHash && bcrypt.compareSync(password, u.pwdHash)) {
+              await clearFailedLogins(lockKey);
               const token = sign({ sub: String(telegramId), role: "client", company: u.company, phone });
               return res.status(200).json({ ok: true, token, role: "client", name: u.company });
             }
@@ -146,6 +202,7 @@ module.exports = async (req, res) => {
               if (emp.active === false) {
                 return res.status(403).json({ ok: false, error: "account blocked" });
               }
+              await clearFailedLogins(lockKey);
               const token = sign({ sub: emp.id, role: emp.role || "accountant", name: emp.name });
               return res.status(200).json({ ok: true, token, role: emp.role || "accountant", name: emp.name });
             }
@@ -158,10 +215,12 @@ module.exports = async (req, res) => {
           if (emp.active === false) {
             return res.status(403).json({ ok: false, error: "account blocked" });
           }
+          await clearFailedLogins(lockKey);
           const token = sign({ sub: emp.id, role: emp.role || "accountant", name: emp.name });
           return res.status(200).json({ ok: true, token, role: emp.role || "accountant", name: emp.name });
         }
 
+        await registerFailedLogin(lockKey);
         return res.status(401).json({ ok: false, error: "invalid credentials" });
       }
 
