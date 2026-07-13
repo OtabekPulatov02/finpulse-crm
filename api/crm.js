@@ -248,6 +248,9 @@ function normCompany(str) {
     .trim();
 }
 
+/* Поля карточки клиента, совместимые с реквизитами «Организации» в 1С (БУ УЗ 3.0) */
+const CLIENT_1C_FIELDS = ["inn", "fullName", "pinfl", "vatCode", "taxSystem", "bank", "mfo", "bankAccount", "address", "director", "taxOffice"];
+
 function safeClient(c) {
   if (!c) return null;
   return {
@@ -260,9 +263,17 @@ function safeClient(c) {
     tariff: c.tariff || null,
     note: c.note || null,
     inn: c.inn || null,
+    fullName: c.fullName || null,
+    pinfl: c.pinfl || null,
+    vatCode: c.vatCode || null,
+    taxSystem: c.taxSystem || null,
+    bank: c.bank || null,
     mfo: c.mfo || null,
     bankAccount: c.bankAccount || null,
     address: c.address || null,
+    director: c.director || null,
+    taxOffice: c.taxOffice || null,
+    source1c: c.source1c || null,
     createdAt: c.createdAt || null,
     updatedAt: c.updatedAt || null,
   };
@@ -307,7 +318,8 @@ async function notifyGroup(text) {
    что и upsertClient() в боте: по нормализованному названию компании
    и по телефону. При конфликте (телефон уже занят другой компанией)
    не сливаем автоматически. */
-async function upsertClientFromCrm({ company, phone, position, tariff, assignedTo, note }, actor) {
+async function upsertClientFromCrm(payload, actor) {
+  const { company, phone, position, tariff, assignedTo, note } = payload || {};
   if (!company || !String(company).trim()) return { ok: false, error: "company required" };
   const normC = normCompany(company);
   const normP = phone ? normPhone(phone) : null;
@@ -341,6 +353,9 @@ async function upsertClientFromCrm({ company, phone, position, tariff, assignedT
       status: existing.status || "pending",
       updatedAt: now,
     };
+    for (const k of CLIENT_1C_FIELDS) {
+      if (Object.prototype.hasOwnProperty.call(payload || {}, k)) merged[k] = payload[k];
+    }
     await redis.set("client:" + id, merged);
     if (!idByCompany) await redis.set("clientcompany:" + normC, id);
     if (normP && !idByPhone) await redis.set("clientphone:" + normP, id);
@@ -361,6 +376,9 @@ async function upsertClientFromCrm({ company, phone, position, tariff, assignedT
     createdAt: now,
     updatedAt: now,
   };
+  for (const k of CLIENT_1C_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(payload || {}, k)) rec[k] = payload[k];
+  }
   await redis.set("client:" + newId, rec);
   await redis.set("clientcompany:" + normC, newId);
   if (normP) await redis.set("clientphone:" + normP, newId);
@@ -372,7 +390,7 @@ async function upsertClientFromCrm({ company, phone, position, tariff, assignedT
 async function patchClient(id, patch, actor) {
   const existing = await redis.get("client:" + id);
   if (!existing) return { ok: false, error: "client not found" };
-  const allowed = ["status", "assignedTo", "tariff", "note", "position", "inn", "mfo", "bankAccount", "address"];
+  const allowed = ["status", "assignedTo", "tariff", "note", "position", ...CLIENT_1C_FIELDS];
   const next = { ...existing };
   for (const k of allowed) {
     if (Object.prototype.hasOwnProperty.call(patch || {}, k)) next[k] = patch[k];
@@ -1081,6 +1099,49 @@ async function updateStatus(num, status, assignee) {
 }
 
 
+
+/* ---------------- Тарифы: лимит операций в месяц + сверхлимит ----------------
+   «Операция» = выполненная задача клиента за календарный месяц.
+   Тарифы настраиваются в CRM (Настройки → Тарифы) и хранятся в Redis. */
+const DEFAULT_TARIFFS = [
+  { id: "standard", name: "Стандарт", price: 1500000, monthlyLimit: 30, overPackOps: 10, overPackPrice: 400000 },
+  { id: "extended", name: "Расширенный", price: 3000000, monthlyLimit: 80, overPackOps: 20, overPackPrice: 600000 },
+  { id: "premium", name: "Премиум", price: 6000000, monthlyLimit: null, overPackOps: null, overPackPrice: null },
+];
+
+async function getTariffs() {
+  try {
+    const t = await redis.get("tariffs");
+    if (Array.isArray(t) && t.length) return t;
+  } catch (e) { /* noop */ }
+  return DEFAULT_TARIFFS;
+}
+
+/* Сколько операций у клиента в этом месяце: выполненные задачи + купленные
+   пакеты сверхлимита (ops:extra) учитываются в лимите. */
+async function clientUsage(client, tasks, tariffs) {
+  const ym = new Date().toISOString().slice(0, 7);
+  const normC = normCompany(client.company || "");
+  const used = tasks.filter((t) =>
+    t.status === "done" &&
+    normCompany(t.company || "") === normC &&
+    String(t.createdAt || "").slice(0, 7) === ym
+  ).length;
+  const tariff = tariffs.find((t) => t.name === client.tariff || t.id === client.tariff) || null;
+  let extraPacks = 0;
+  try { extraPacks = Number((await redis.get(`opspacks:${client.id}:${ym}`)) || 0); } catch (e) { /* noop */ }
+  const baseLimit = tariff && tariff.monthlyLimit != null ? tariff.monthlyLimit : null;
+  const limit = baseLimit == null ? null : baseLimit + extraPacks * (tariff.overPackOps || 0);
+  return {
+    used,
+    limit,
+    baseLimit,
+    extraPacks,
+    tariffName: tariff ? tariff.name : client.tariff || null,
+    over: limit != null && used > limit,
+  };
+}
+
 /* ---------------- Заявки на доступ (конфликты телефонов/аккаунтов из бота) ---------------- */
 async function listAccessRequests() {
   const rows = (await redis.lrange("access_requests", 0, 49)) || [];
@@ -1186,6 +1247,16 @@ module.exports = async (req, res) => {
         const rows = (await redis.lrange("logs:" + src, 0, 199)) || [];
         const logs = rows.map((r) => { try { return typeof r === "string" ? JSON.parse(r) : r; } catch { return null; } }).filter(Boolean);
         return res.status(200).json({ ok: true, src, logs });
+      }
+      if (q.r === "tariffs") {
+        return res.status(200).json({ ok: true, tariffs: await getTariffs() });
+      }
+      if (q.r === "usage") {
+        if (!isStaff) return res.status(403).json({ ok: false, error: "forbidden" });
+        const [all, tasksAll, tariffs] = await Promise.all([listClients(), listTasks(), getTariffs()]);
+        const usage = {};
+        for (const c of all) usage[c.id] = await clientUsage(c, tasksAll, tariffs);
+        return res.status(200).json({ ok: true, usage });
       }
       if (q.r === "access_requests") {
         if (!isStaff) return res.status(403).json({ ok: false, error: "forbidden" });
@@ -1317,6 +1388,32 @@ module.exports = async (req, res) => {
          isStaff (или isAdmin для деструктивных действий). */
       if (!isStaff && !isClient && !isGuest) return res.status(403).json({ ok: false, error: "forbidden" });
 
+      if (body && body.action === "tariffs_save" && Array.isArray(body.tariffs)) {
+        const isAdmin = !rolesEnforced || (authUser && authUser.role === "admin");
+        if (!isAdmin) return res.status(403).json({ ok: false, error: "admin only" });
+        const clean = body.tariffs
+          .filter((t) => t && t.name)
+          .slice(0, 20)
+          .map((t, i) => ({
+            id: String(t.id || "t" + i),
+            name: String(t.name).slice(0, 60),
+            price: t.price == null ? null : Number(t.price) || 0,
+            monthlyLimit: t.monthlyLimit == null || t.monthlyLimit === "" ? null : Math.max(0, Number(t.monthlyLimit) || 0),
+            overPackOps: t.overPackOps == null || t.overPackOps === "" ? null : Math.max(0, Number(t.overPackOps) || 0),
+            overPackPrice: t.overPackPrice == null || t.overPackPrice === "" ? null : Number(t.overPackPrice) || 0,
+          }));
+        await redis.set("tariffs", clean);
+        await logEvent("crm", "tariffs_updated", { count: clean.length, by: (authUser && authUser.name) || "CRM" });
+        return res.status(200).json({ ok: true, tariffs: clean });
+      }
+      if (body && body.action === "ops_pack_add" && body.clientId) {
+        if (!isStaff) return res.status(403).json({ ok: false, error: "forbidden" });
+        const ym = new Date().toISOString().slice(0, 7);
+        const n = await redis.incrby(`opspacks:${body.clientId}:${ym}`, Math.max(1, Number(body.packs) || 1));
+        await redis.expire(`opspacks:${body.clientId}:${ym}`, 60 * 60 * 24 * 62);
+        await logEvent("crm", "ops_pack_added", { clientId: body.clientId, month: ym, packs: n, by: (authUser && authUser.name) || "CRM" });
+        return res.status(200).json({ ok: true, packs: n });
+      }
       if (body && body.action === "access_request_resolve" && body.id) {
         if (!isStaff) return res.status(403).json({ ok: false, error: "forbidden" });
         const r = await resolveAccessRequest(String(body.id), !!body.approve, authUser?.name || "CRM");
