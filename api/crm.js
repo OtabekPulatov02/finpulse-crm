@@ -197,6 +197,12 @@ function safeTask(t) {
     /* "task" — обычная задача, "reminder" — авто-созданная из календаря
        (налог/платёж); у напоминаний нет company. */
     type: t.type === "reminder" ? "reminder" : "task",
+    /* Лента чата задачи (вложения + текстовые сообщения, в обе стороны).
+       file_id внутри вложений не отдаём — см. attachments выше. */
+    thread: Array.isArray(t.thread) ? t.thread.map((m) => ({
+      id: m.id, at: m.at, from: m.from, by: m.by, text: m.text || null,
+      fileIndex: typeof m.fileIndex === "number" ? m.fileIndex : null,
+    })) : [],
   };
 }
 
@@ -667,6 +673,57 @@ async function attachFileToTask(task, buf, filename, mimeType, actor, fromClient
   task.updatedAt = new Date().toISOString();
   await redis.set("task:" + task.num, task);
   await logEvent("crm", "task_file_attached", { num: task.num, by: actor || "CRM" });
+  return { ok: true, task: safeTask(task) };
+}
+
+/* --- Чат внутри задачи (полноценный, двусторонний): сообщение,
+   отправленное из CRM, реально доставляется в Telegram — сотруднику
+   уходит клиенту в личку, клиенту уходит в группу бухгалтеров (реплаем
+   на карточку задачи, как и обычные реплаи из Telegram). Само сообщение
+   всегда сохраняется в task.thread, чтобы лента в CRM совпадала с тем,
+   что видно в Telegram, независимо от того, откуда оно отправлено. */
+async function sendTaskMessage(task, text, actor, fromClient) {
+  const cleanText = formatSumsInText(String(text || "").trim());
+  if (!cleanText) return { ok: false, error: "text required" };
+
+  const entry = {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    at: new Date().toISOString(),
+    from: fromClient ? "client" : "staff",
+    by: actor || (fromClient ? task.company || "Клиент" : "CRM"),
+    text: cleanText,
+    fileIndex: null,
+  };
+
+  try {
+    if (fromClient) {
+      const opts = task.gmsg ? { reply_to_message_id: task.gmsg } : {};
+      const sent = await tgToGroup("sendMessage", {
+        text: `💬 Клиент по задаче №${task.num} (${task.company || "—"}):
+${cleanText}`,
+        ...opts,
+      });
+      if (sent && sent.ok && sent.result && sent.result.message_id) {
+        await redis.set(`route:g:${sent.result.message_id}`, task.num);
+      }
+    } else if (task.client) {
+      const sent = await tg("sendMessage", {
+        chat_id: task.client,
+        text: `💬 ${actor || "Бухгалтерия"} по задаче №${task.num}:
+${cleanText}`,
+      });
+      if (sent && sent.ok && sent.result && sent.result.message_id) {
+        await redis.set(`route:c:${task.client}:${sent.result.message_id}`, task.num);
+      }
+    }
+  } catch (e) { /* доставка в Telegram не критична для сохранения сообщения в ленте */ }
+
+  task.thread = Array.isArray(task.thread) ? task.thread : [];
+  task.thread.push(entry);
+  if (task.thread.length > 200) task.thread = task.thread.slice(-200);
+  task.updatedAt = new Date().toISOString();
+  await redis.set("task:" + task.num, task);
+  await logEvent("crm", "task_message_sent", { num: task.num, by: entry.by, from: entry.from });
   return { ok: true, task: safeTask(task) };
 }
 
@@ -1212,6 +1269,20 @@ module.exports = async (req, res) => {
         }
         const actor = (authUser && authUser.name) || "CRM";
         const r = await attachFileToTask(task, buf, filename, mimeType, actor, isClient);
+        return res.status(200).json(r);
+      }
+      if (body && body.action === "task_message_send" && body.num) {
+        if (!isStaff && !isClient && !isGuest) return res.status(403).json({ ok: false, error: "forbidden" });
+        if (isGuest) {
+          return res.status(200).json({ ok: true, demo: true });
+        }
+        const task = await redis.get("task:" + Number(body.num));
+        if (!task) return res.status(200).json({ ok: false, error: "task not found" });
+        if (isClient && normCompany(task.company) !== normCompany(authUser.company || "")) {
+          return res.status(403).json({ ok: false, error: "forbidden" });
+        }
+        const actor = (authUser && authUser.name) || (isClient ? task.company : "CRM");
+        const r = await sendTaskMessage(task, body.text, actor, isClient);
         return res.status(200).json(r);
       }
       if (body && body.action === "client_delete" && body.id) {
