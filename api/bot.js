@@ -535,7 +535,7 @@ const T2 = {
     sla: (h) => `⏱ Приняли! Проведём вашу операцию в течение ${h} ч.`,
     afterHours: (a, b) => `🕘 Приём заявок — с ${a}:00 до ${b}:00 (Ташкент). Сейчас нерабочее время.\n\nОтправить заявку на завтра или отменить?`,
     btnDefer: "📅 Отправить на завтра",
-    deferOk: (a) => `📅 Заявка принята! Возьмём в работу завтра с ${a}:00. `,
+    deferOk: (a, h) => `📅 Заявка принята! Возьмём в работу завтра с ${a}:00 и проведём в течение ${h} ч. — то есть до ~${a + h}:00.`,
     askPositionTabs: "Кем вы работаете в компании? Выберите должность 👇",
     askPositionCustom: "Напишите вашу должность ✍️",
     pendingRole: "⏳ Ваш профиль ожидает подтверждения доверенным лицом компании. Отправлять заявки пока нельзя — мы уже отправили запрос, это быстро.",
@@ -556,7 +556,7 @@ const T2 = {
     sla: (h) => `⏱ Qabul qilindi! Operatsiyangizni ${h} soat ichida bajaramiz.`,
     afterHours: (a, b) => `🕘 Arizalar ${a}:00–${b}:00 (Toshkent) qabul qilinadi. Hozir ish vaqti emas.\n\nErtaga yuboraylikmi yoki bekor qilasizmi?`,
     btnDefer: "📅 Ertagaga yuborish",
-    deferOk: (a) => `📅 Ariza qabul qilindi! Ertaga soat ${a}:00 dan ishga olamiz.`,
+    deferOk: (a, h) => `📅 Ariza qabul qilindi! Ertaga ${a}:00 dan ishga olamiz va ${h} soat ichida bajaramiz — ya'ni ~${a + h}:00 gacha.`,
     askPositionTabs: "Kompaniyada kim bo'lib ishlaysiz? Lavozimni tanlang 👇",
     askPositionCustom: "Lavozimingizni yozing ✍️",
     pendingRole: "⏳ Profilingiz kompaniya ishonchli vakili tasdig'ini kutmoqda. Hozircha ariza yuborib bo'lmaydi — so'rov yuborildi.",
@@ -577,7 +577,7 @@ const T2 = {
     sla: (h) => `⏱ Got it! We'll process your operation within ${h} h.`,
     afterHours: (a, b) => `🕘 Requests are accepted ${a}:00–${b}:00 (Tashkent). It's after hours now.\n\nSend it for tomorrow or cancel?`,
     btnDefer: "📅 Send for tomorrow",
-    deferOk: (a) => `📅 Request accepted! We'll take it tomorrow from ${a}:00.`,
+    deferOk: (a, h) => `📅 Request accepted! We'll take it tomorrow from ${a}:00 and process it within ${h} h — by ~${a + h}:00.`,
     askPositionTabs: "What's your position at the company? 👇",
     askPositionCustom: "Type your position ✍️",
     pendingRole: "⏳ Your profile is awaiting confirmation by the company's trusted person. You can't send requests yet — we've sent them a request.",
@@ -1029,12 +1029,31 @@ async function createTaskFromDraft(ctx, u, deferred) {
   u.draft = null;
   await setUser(ctx.from.id, u);
 
+  /* ИИ-классификация свободных заявок (если задан ключ и не выбрана категория) */
+  if (!task.category && process.env.OPENAI_API_KEY) {
+    try {
+      const aiSet = (await redis.get("ai:settings")) || {};
+      if (aiSet.classify !== false) {
+        const { classifyTask } = require("../lib/ai.js");
+        const cats = await getCategories();
+        const r = await classifyTask(task.text, cats);
+        if (r && r.category) {
+          task.category = r.category;
+          task.sub = r.sub || null;
+          task.aiClassified = true;
+          await redis.set(taskKey(num), task);
+          await logEvent("telegram", "task_ai_classified", { num, category: r.category, sub: r.sub || null });
+        }
+      }
+    } catch (e) { /* ИИ не критичен для приёма заявки */ }
+  }
+
   /* Подтверждение клиенту + ожидаемое время */
   await ctx.answerCallbackQuery("✅");
   const confirm = await ctx.reply(t.created(num));
   await redis.set(clientRouteKey(ctx.from.id, confirm.message_id), num);
   try {
-    await ctx.reply(deferred ? t2.deferOk(set.workStart) : t2.sla(set.slaHours));
+    await ctx.reply(deferred ? t2.deferOk(set.workStart, set.slaHours) : t2.sla(set.slaHours));
   } catch (e) { /* noop */ }
 
   /* Карточка в группу бухгалтеров (без личных данных клиента) */
