@@ -682,48 +682,67 @@ async function attachFileToTask(task, buf, filename, mimeType, actor, fromClient
    на карточку задачи, как и обычные реплаи из Telegram). Само сообщение
    всегда сохраняется в task.thread, чтобы лента в CRM совпадала с тем,
    что видно в Telegram, независимо от того, откуда оно отправлено. */
-async function sendTaskMessage(task, text, actor, fromClient) {
+async function sendTaskMessage(task, text, actor, fromClient, file) {
   const cleanText = formatSumsInText(String(text || "").trim());
-  if (!cleanText) return { ok: false, error: "text required" };
+  if (!cleanText && !file) return { ok: false, error: "text required" };
+
+  /* Лента задачи (YouTrack-style) — это внутренняя история/чат по задаче,
+     сообщения из неё НИКУДА не отправляются (ни клиенту в Telegram, ни в
+     группу бухгалтеров): только хранятся в task.thread. Файлы всё ещё
+     физически хранятся через Telegram (у нас нет отдельного blob-хранилища
+     — group используется просто как файловый бэкенд), но без всякой
+     уведомляющей подписи и без пересылки кому-либо. */
+  let fileIndex = null;
+  if (file && file.dataBase64) {
+    let buf;
+    try { buf = Buffer.from(file.dataBase64, "base64"); } catch { return { ok: false, error: "bad file data" }; }
+    if (buf.length > 9 * 1024 * 1024) {
+      return { ok: false, error: "Файл слишком большой (максимум 9 МБ)" };
+    }
+    const group = await redis.get("group");
+    if (!group) return { ok: false, error: "Файловое хранилище не настроено" };
+    const isImage = /^image\//.test(file.mimeType || "");
+    const caption = `📎 лента задачи №${task.num}`.slice(0, 1024);
+    let resp;
+    try {
+      resp = await sendTgFileToGroup(isImage ? "sendPhoto" : "sendDocument", isImage ? "photo" : "document", buf, file.filename, file.mimeType, caption);
+      if (isImage && (!resp || !resp.ok)) {
+        resp = await sendTgFileToGroup("sendDocument", "document", buf, file.filename, file.mimeType, caption);
+      }
+    } catch (e) {
+      return { ok: false, error: "Не удалось загрузить файл" };
+    }
+    if (!resp || !resp.ok) {
+      return { ok: false, error: "Telegram отклонил файл" + (resp && resp.description ? `: ${resp.description}` : "") };
+    }
+    const result = resp.result || {};
+    let fileEntry = null;
+    if (Array.isArray(result.photo) && result.photo.length) {
+      fileEntry = { kind: "photo", file_id: result.photo[result.photo.length - 1].file_id };
+    } else if (result.document) {
+      fileEntry = { kind: "document", file_id: result.document.file_id };
+    }
+    if (!fileEntry) return { ok: false, error: "Не удалось определить загруженный файл" };
+    task.files = Array.isArray(task.files) ? task.files : [];
+    task.files.push(fileEntry);
+    fileIndex = task.files.length - 1;
+  }
 
   const entry = {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     at: new Date().toISOString(),
     from: fromClient ? "client" : "staff",
     by: actor || (fromClient ? task.company || "Клиент" : "CRM"),
-    text: cleanText,
-    fileIndex: null,
+    text: cleanText || null,
+    fileIndex,
   };
-
-  try {
-    if (fromClient) {
-      const opts = task.gmsg ? { reply_to_message_id: task.gmsg } : {};
-      const sent = await tgToGroup("sendMessage", {
-        text: `💬 Клиент по задаче №${task.num} (${task.company || "—"}):
-${cleanText}`,
-        ...opts,
-      });
-      if (sent && sent.ok && sent.result && sent.result.message_id) {
-        await redis.set(`route:g:${sent.result.message_id}`, task.num);
-      }
-    } else if (task.client) {
-      const sent = await tg("sendMessage", {
-        chat_id: task.client,
-        text: `💬 ${actor || "Бухгалтерия"} по задаче №${task.num}:
-${cleanText}`,
-      });
-      if (sent && sent.ok && sent.result && sent.result.message_id) {
-        await redis.set(`route:c:${task.client}:${sent.result.message_id}`, task.num);
-      }
-    }
-  } catch (e) { /* доставка в Telegram не критична для сохранения сообщения в ленте */ }
 
   task.thread = Array.isArray(task.thread) ? task.thread : [];
   task.thread.push(entry);
   if (task.thread.length > 200) task.thread = task.thread.slice(-200);
   task.updatedAt = new Date().toISOString();
   await redis.set("task:" + task.num, task);
-  await logEvent("crm", "task_message_sent", { num: task.num, by: entry.by, from: entry.from });
+  await logEvent("crm", "task_message_sent", { num: task.num, by: entry.by, from: entry.from, file: fileIndex !== null });
   return { ok: true, task: safeTask(task) };
 }
 
@@ -1282,7 +1301,10 @@ module.exports = async (req, res) => {
           return res.status(403).json({ ok: false, error: "forbidden" });
         }
         const actor = (authUser && authUser.name) || (isClient ? task.company : "CRM");
-        const r = await sendTaskMessage(task, body.text, actor, isClient);
+        const file = body.dataBase64
+          ? { filename: body.filename, mimeType: body.mimeType, dataBase64: body.dataBase64 }
+          : null;
+        const r = await sendTaskMessage(task, body.text, actor, isClient, file);
         return res.status(200).json(r);
       }
       if (body && body.action === "client_delete" && body.id) {
