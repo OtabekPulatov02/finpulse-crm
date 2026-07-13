@@ -130,6 +130,11 @@ async function issueClientPassword(ctx, u) {
           await logEvent("telegram", "company_claim_phone_mismatch", {
             company: u.company, claimedPhone: phone, knownPhone, telegramId: ctx.from.id,
           });
+          await addAccessRequest("phone_mismatch", {
+            company: u.company, claimedPhone: phone, knownPhone,
+            telegramId: ctx.from.id,
+            tgName: [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(" ") + (ctx.from.username ? " @" + ctx.from.username : ""),
+          });
           try {
             await sendToGroup((gid) => bot.api.sendMessage(gid,
               `⚠️ Кто-то представился клиентом компании «${u.company}» с телефоном ${formatPhoneDisplay(phone)}, ` +
@@ -149,6 +154,11 @@ async function issueClientPassword(ctx, u) {
     if (!sameCompany) {
       await logEvent("telegram", "phone_conflict", {
         phone, company: u.company, otherTelegramId: String(existingOwnerId), otherCompany: otherUser?.company || null,
+      });
+      await addAccessRequest("phone_conflict", {
+        company: u.company, claimedPhone: phone, otherCompany: otherUser?.company || null,
+        telegramId: ctx.from.id,
+        tgName: [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(" ") + (ctx.from.username ? " @" + ctx.from.username : ""),
       });
       try {
         await sendToGroup((gid) => bot.api.sendMessage(gid,
@@ -208,6 +218,11 @@ async function upsertClient(u, telegramId) {
     if (telegramChanged && !ownershipVerified) {
       await logEvent("telegram", "client_telegram_claim_mismatch", {
         clientId: id, company: u.company, existingTelegramId: existing.telegramId, claimedTelegramId: telegramId, phone,
+      });
+      await addAccessRequest("telegram_rebind", {
+        company: existing.company || u.company, clientId: id, claimedPhone: phone || null,
+        existingTelegramId: String(existing.telegramId), telegramId,
+        tgName: null,
       });
       try {
         await sendToGroup((gid) => bot.api.sendMessage(gid,
@@ -531,6 +546,18 @@ async function logEvent(source, event, data) {
     await redis.lpush("logs:" + source, JSON.stringify({ ts: new Date().toISOString(), event, ...data }));
     await redis.ltrim("logs:" + source, 0, 499);
   } catch (e) { console.error("log:", e); }
+}
+
+/* Заявка на ручную проверку доступа — видна в CRM (раздел «Клиенты») */
+async function addAccessRequest(type, data) {
+  try {
+    const id = "ar_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    await redis.lpush("access_requests", JSON.stringify({
+      id, type, status: "pending", at: new Date().toISOString(), ...data,
+    }));
+    await redis.ltrim("access_requests", 0, 49);
+    return id;
+  } catch (e) { return null; }
 }
 
 /* Отправка длинного текста частями (в пределах лимита Telegram) */

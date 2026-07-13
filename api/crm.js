@@ -1080,6 +1080,69 @@ async function updateStatus(num, status, assignee) {
   return { ok: true, task: safeTask(task) };
 }
 
+
+/* ---------------- Заявки на доступ (конфликты телефонов/аккаунтов из бота) ---------------- */
+async function listAccessRequests() {
+  const rows = (await redis.lrange("access_requests", 0, 49)) || [];
+  return rows.map((r) => { try { return typeof r === "string" ? JSON.parse(r) : r; } catch { return null; } }).filter(Boolean);
+}
+
+async function resolveAccessRequest(id, approve, actor) {
+  const rows = (await redis.lrange("access_requests", 0, 49)) || [];
+  let idx = -1, reqObj = null;
+  rows.forEach((r, i) => {
+    try {
+      const o = typeof r === "string" ? JSON.parse(r) : r;
+      if (o && o.id === id) { idx = i; reqObj = o; }
+    } catch (e) { /* noop */ }
+  });
+  if (!reqObj) return { ok: false, error: "request not found" };
+  if (reqObj.status !== "pending") return { ok: false, error: "already resolved" };
+
+  let issuedPassword = null;
+  if (approve) {
+    if (reqObj.type === "telegram_rebind") {
+      const client = reqObj.clientId ? await redis.get("client:" + reqObj.clientId) : null;
+      if (!client) return { ok: false, error: "client card not found" };
+      client.telegramId = reqObj.telegramId;
+      client.updatedAt = new Date().toISOString();
+      await redis.set("client:" + reqObj.clientId, client);
+      await tg("sendMessage", { chat_id: reqObj.telegramId, text: "✅ Бухгалтерия подтвердила ваш аккаунт. Уведомления по задачам «" + (reqObj.company || "") + "» снова приходят сюда." });
+    } else {
+      const u = await redis.get("user:" + reqObj.telegramId);
+      if (!u) return { ok: false, error: "bot user not found" };
+      const phone = normPhone(reqObj.claimedPhone || u.phone || "");
+      if (!phone) return { ok: false, error: "no phone in request" };
+      issuedPassword = genPassword();
+      u.pwdHash = bcrypt.hashSync(issuedPassword, 10);
+      u.pwdPlain = issuedPassword;
+      u.authPhone = phone;
+      await redis.set("user:" + reqObj.telegramId, u);
+      await redis.set("authphone:" + phone, reqObj.telegramId);
+      const site = process.env.CRM_APP_URL || "https://finpulse-crm-app.vercel.app";
+      await tg("sendMessage", {
+        chat_id: reqObj.telegramId,
+        parse_mode: "HTML",
+        text: "✅ Бухгалтерия подтвердила ваш доступ.\n\n🔐 <b>Личный кабинет CRM</b>\nСайт: " + site +
+          "\nЛогин (телефон): <code>" + phone + "</code>\nПароль: <code>" + issuedPassword + "</code>\n\nЭтот доступ всегда можно посмотреть командой /help.",
+      });
+    }
+  } else {
+    try {
+      await tg("sendMessage", { chat_id: reqObj.telegramId, text: "❌ Бухгалтерия не подтвердила доступ по компании «" + (reqObj.company || "") + "». Если это ошибка — свяжитесь с вашим бухгалтером." });
+    } catch (e) { /* noop */ }
+  }
+
+  reqObj.status = approve ? "approved" : "rejected";
+  reqObj.resolvedAt = new Date().toISOString();
+  reqObj.resolvedBy = actor || "CRM";
+  await redis.lset("access_requests", idx, JSON.stringify(reqObj));
+  await logEvent("crm", approve ? "access_request_approved" : "access_request_rejected", {
+    requestId: id, type: reqObj.type, company: reqObj.company || null, by: actor || "CRM",
+  });
+  return { ok: true, request: reqObj };
+}
+
 module.exports = async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", resolveOrigin(req));
   res.setHeader("Vary", "Origin");
@@ -1123,6 +1186,10 @@ module.exports = async (req, res) => {
         const rows = (await redis.lrange("logs:" + src, 0, 199)) || [];
         const logs = rows.map((r) => { try { return typeof r === "string" ? JSON.parse(r) : r; } catch { return null; } }).filter(Boolean);
         return res.status(200).json({ ok: true, src, logs });
+      }
+      if (q.r === "access_requests") {
+        if (!isStaff) return res.status(403).json({ ok: false, error: "forbidden" });
+        return res.status(200).json({ ok: true, requests: await listAccessRequests() });
       }
       if (q.r === "pending") {
         if (!isStaff) return res.status(403).json({ ok: false, error: "forbidden" });
@@ -1250,6 +1317,11 @@ module.exports = async (req, res) => {
          isStaff (или isAdmin для деструктивных действий). */
       if (!isStaff && !isClient && !isGuest) return res.status(403).json({ ok: false, error: "forbidden" });
 
+      if (body && body.action === "access_request_resolve" && body.id) {
+        if (!isStaff) return res.status(403).json({ ok: false, error: "forbidden" });
+        const r = await resolveAccessRequest(String(body.id), !!body.approve, authUser?.name || "CRM");
+        return res.status(200).json(r);
+      }
       if (body && body.action === "status" && body.num && body.status) {
         if (!isStaff) return res.status(403).json({ ok: false, error: "forbidden" });
         if (!["new", "in_progress", "done", "cancelled"].includes(body.status)) {
