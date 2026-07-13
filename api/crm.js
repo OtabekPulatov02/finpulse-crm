@@ -1270,6 +1270,12 @@ module.exports = async (req, res) => {
         const cur = (await redis.get("bot:settings")) || {};
         return res.status(200).json({ ok: true, settings: { ...def, ...cur } });
       }
+      if (q.r === "bot_positions") {
+        if (!isStaff) return res.status(403).json({ ok: false, error: "forbidden" });
+        const def = ["👑 Директор", "💼 Владелец", "📚 Главный бухгалтер", "🧾 Бухгалтер", "📋 Менеджер"];
+        const cur = (await redis.get("bot:positions")) || null;
+        return res.status(200).json({ ok: true, positions: Array.isArray(cur) && cur.length ? cur : def });
+      }
       if (q.r === "bot_categories") {
         if (!isStaff) return res.status(403).json({ ok: false, error: "forbidden" });
         const cats = (await redis.get("bot:categories")) || null;
@@ -1429,6 +1435,15 @@ module.exports = async (req, res) => {
         await redis.set("bot:settings", clean);
         await logEvent("crm", "bot_settings_updated", { ...clean, by: (authUser && authUser.name) || "CRM" });
         return res.status(200).json({ ok: true, settings: clean });
+      }
+      if (body && body.action === "bot_positions_save" && Array.isArray(body.positions)) {
+        const isAdmin = !rolesEnforced || (authUser && authUser.role === "admin");
+        if (!isAdmin) return res.status(403).json({ ok: false, error: "admin only" });
+        const clean = body.positions.map((x) => String(x).trim().slice(0, 40)).filter(Boolean).slice(0, 15);
+        if (!clean.length) return res.status(200).json({ ok: false, error: "нужна хотя бы одна должность" });
+        await redis.set("bot:positions", clean);
+        await logEvent("crm", "bot_positions_updated", { count: clean.length, by: (authUser && authUser.name) || "CRM" });
+        return res.status(200).json({ ok: true, positions: clean });
       }
       if (body && body.action === "bot_categories_save" && Array.isArray(body.categories)) {
         const isAdmin = !rolesEnforced || (authUser && authUser.role === "admin");

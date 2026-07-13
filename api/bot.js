@@ -494,10 +494,18 @@ function subsKb(catIdx, subs) {
 }
 
 /* ---------------- Должности и роли доверенных лиц ---------------- */
-const POSITIONS = ["👑 Директор", "💼 Владелец", "📚 Главный бухгалтер", "🧾 Бухгалтер", "📋 Менеджер", "✏️ Другое"];
-function positionsKb() {
+const DEFAULT_POSITIONS = ["👑 Директор", "💼 Владелец", "📚 Главный бухгалтер", "🧾 Бухгалтер", "📋 Менеджер"];
+async function getPositions() {
+  let list = DEFAULT_POSITIONS;
+  try {
+    const c = await redis.get("bot:positions");
+    if (Array.isArray(c) && c.length) list = c.map((x) => String(x).slice(0, 40));
+  } catch (e) { /* noop */ }
+  return [...list, "✏️ Другое"];
+}
+function positionsKb(list) {
   const kb = new InlineKeyboard();
-  POSITIONS.forEach((p2, i) => { kb.text(p2, "pos:" + i); if (i % 2 === 1) kb.row(); });
+  list.forEach((p2, i) => { kb.text(p2, "pos:" + i); if (i % 2 === 1) kb.row(); });
   return kb;
 }
 /* Доверенное лицо: телефон совпадает с карточкой клиента (внесён бухгалтером)
@@ -671,7 +679,7 @@ async function afterCompanySet(ctx, u) {
   if (!u.position) {
     u.state = "position";
     await setUser(ctx.from.id, u);
-    return ctx.reply(t2of(u).askPositionTabs, { reply_markup: positionsKb() });
+    return ctx.reply(t2of(u).askPositionTabs, { reply_markup: positionsKb(await getPositions()) });
   }
   u.state = u.phone ? "idle" : "phone";
   await setUser(ctx.from.id, u);
@@ -1245,11 +1253,12 @@ bot.callbackQuery(/^pos:(\d+)$/, async (ctx) => {
   const t2 = t2of(u);
   const idx = Number(ctx.match[1]);
   await ctx.answerCallbackQuery();
-  if (idx === POSITIONS.length - 1) {
+  const positions = await getPositions();
+  if (idx >= positions.length - 1) {
     /* «Другое» — вводит текстом, state остаётся position */
     return ctx.reply(t2.askPositionCustom);
   }
-  u.position = POSITIONS[idx].replace(/^[^\wа-яА-ЯёЁ]+\s*/, "");
+  u.position = positions[idx].replace(/^[^\wа-яА-ЯёЁ]+\s*/, "");
   u.state = u.phone ? "idle" : "phone";
   await setUser(ctx.from.id, u);
   try { await ctx.editMessageReplyMarkup({ reply_markup: { inline_keyboard: [] } }); } catch (e) { /* noop */ }
