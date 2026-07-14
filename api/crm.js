@@ -215,6 +215,9 @@ function safeTask(t) {
        светить его в браузере; сами байты отдаются через r=task_file). */
     attachments: Array.isArray(t.files) ? t.files.map((f, i) => ({ index: i, kind: f.kind || "document" })) : [],
     dueDate: t.dueDate || null,
+    priority: t.priority || null,
+    aiIntake: t.aiIntake || null,
+    aiDraft: t.aiDraft || null,
     source: t.source === "crm" ? "crm" : "bot",
     doneAt: t.doneAt || null,
     /* "task" — обычная задача, "reminder" — авто-созданная из календаря

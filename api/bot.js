@@ -482,7 +482,7 @@ async function get1cSuggestions(company, catId) {
 }
 function catsKb(cats) {
   const kb = new InlineKeyboard();
-  cats.forEach((c, i) => { kb.text(c.name, "cat:" + i); if (i % 2 === 1) kb.row(); });
+  cats.forEach((c, i) => { kb.text(c.name, "cat:" + i).row(); });
   return kb;
 }
 function subsKb(catIdx, subs) {
@@ -1037,25 +1037,6 @@ async function createTaskFromDraft(ctx, u, deferred) {
   u.draft = null;
   await setUser(ctx.from.id, u);
 
-  /* ИИ-классификация свободных заявок (если задан ключ и не выбрана категория) */
-  if (!task.category && process.env.OPENAI_API_KEY) {
-    try {
-      const aiSet = (await redis.get("ai:settings")) || {};
-      if (aiSet.classify !== false) {
-        const { classifyTask } = require("../lib/ai.js");
-        const cats = await getCategories();
-        const r = await classifyTask(task.text, cats);
-        if (r && r.category) {
-          task.category = r.category;
-          task.sub = r.sub || null;
-          task.aiClassified = true;
-          await redis.set(taskKey(num), task);
-          await logEvent("telegram", "task_ai_classified", { num, category: r.category, sub: r.sub || null });
-        }
-      }
-    } catch (e) { /* ИИ не критичен для приёма заявки */ }
-  }
-
   /* Подтверждение клиенту + ожидаемое время */
   await ctx.answerCallbackQuery("✅");
   const confirm = await ctx.reply(t.created(num));
@@ -1102,6 +1083,97 @@ async function createTaskFromDraft(ctx, u, deferred) {
   } catch (e) {
     console.error("group send:", e);
     await logEvent("telegram", "group_send_failed", { num, error: String(e).slice(0, 200) });
+  }
+
+  /* ---- AI-бухгалтер: полный разбор заявки + подсказка бухгалтерам в группу ---- */
+  if (process.env.OPENAI_API_KEY) {
+    try {
+      const aiSet = (await redis.get("ai:settings")) || {};
+      if (aiSet.classify !== false) {
+        const { intakeTask, draftFromTask } = require("../lib/ai.js");
+        const cats = await getCategories();
+
+        /* загрузка сотрудников для рекомендации исполнителя */
+        let employees = [];
+        try {
+          const ids = (await redis.smembers("employees")) || [];
+          const recs = ids.length ? await redis.mget(...ids.map((i) => "employee:" + i)) : [];
+          const names = recs.filter((e) => e && e.active !== false).map((e) => e.name);
+          if (names.length) {
+            const cnt = {};
+            const nMax = Number((await redis.get("counter:task")) || 0);
+            const keys = [];
+            for (let i = 100 + nMax; i > Math.max(100, 100 + nMax - 60); i--) keys.push(taskKey(i));
+            const recent = keys.length ? await redis.mget(...keys) : [];
+            for (const tk of recent) {
+              if (tk && tk.assignee && (tk.status === "new" || tk.status === "in_progress")) {
+                cnt[tk.assignee] = (cnt[tk.assignee] || 0) + 1;
+              }
+            }
+            employees = names.map((nm) => ({ name: nm, activeTasks: cnt[nm] || 0 }));
+          }
+        } catch (e) { /* noop */ }
+
+        const ai = await intakeTask({
+          text: task.text,
+          company: task.company,
+          categories: cats,
+          employees,
+          today: new Date(Date.now() + 5 * 3600e3).toISOString().slice(0, 10),
+        });
+
+        if (ai) {
+          if (!task.category && ai.category) { task.category = ai.category; task.sub = ai.sub || null; }
+          task.priority = ai.priority;
+          if (ai.dueDate && !task.dueDate) task.dueDate = ai.dueDate;
+          if (ai.assignee && !task.assignee && employees.some((e) => e.name === ai.assignee)) {
+            task.assignee = ai.assignee;
+            task.status = "in_progress";
+          }
+          task.aiIntake = { ...ai, at: new Date().toISOString() };
+
+          /* простая типовая задача → сразу готовим черновик операции */
+          let draft = null;
+          if (ai.complexity === "simple" && aiSet.drafts !== false) {
+            try {
+              let clientInfo = null;
+              const cid = await redis.get("clientcompany:" + normCompany(task.company || ""));
+              if (cid) clientInfo = await redis.get("client:" + cid);
+              draft = await draftFromTask(task, clientInfo);
+              if (draft) task.aiDraft = { ...draft, generatedAt: new Date().toISOString(), by: "AI-бухгалтер" };
+            } catch (e) { /* noop */ }
+          }
+
+          await redis.set(taskKey(num), task);
+          await logEvent("telegram", "task_ai_intake", {
+            num, category: task.category || null, priority: ai.priority,
+            complexity: ai.complexity, assignee: task.assignee || null, draft: !!draft,
+          });
+
+          /* подсказка бухгалтерам — ответом на карточку задачи */
+          try {
+            const lines = [
+              `🤖 AI-бухгалтер по задаче №${num}:`,
+              `🗂 ${task.category || "категория не определена"}${task.sub ? " / " + task.sub : ""}`,
+              `⚡ Приоритет: ${ai.priority} · сложность: ${ai.complexity === "simple" ? "простая" : ai.complexity === "complex" ? "сложная" : "средняя"}`,
+            ];
+            if (task.dueDate) lines.push(`📅 Срок: ${task.dueDate}`);
+            if (task.assignee) lines.push(`👤 Исполнитель: ${task.assignee} (наименее загружен) — взята в работу`);
+            if (ai.operation1c) lines.push(`🧾 Операция 1С: ${ai.operation1c}`);
+            if (!ai.relevant) lines.push("⚠️ Похоже, заявка не относится к бухгалтерии — уточните у клиента.");
+            if (ai.missing.length) lines.push(`❗ Не хватает: ${ai.missing.join(", ")}`);
+            if (draft) lines.push("📝 Черновик операции готов — проверьте в CRM (карточка задачи).");
+            if (ai.hint) lines.push(`💡 ${ai.hint}`);
+            const reply = task.gmsg ? { reply_to_message_id: task.gmsg } : {};
+            const hm = await sendToGroup((gid) => bot.api.sendMessage(gid, lines.join("\n"), reply));
+            if (hm) await redis.set(groupRouteKey(hm.message_id), num);
+          } catch (e) { /* noop */ }
+        }
+      }
+    } catch (e) {
+      console.error("ai intake:", e);
+      await logEvent("telegram", "ai_intake_failed", { num, error: String(e).slice(0, 150) });
+    }
   }
 }
 
