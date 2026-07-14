@@ -283,14 +283,14 @@ const T = {
   ru: {
     askCompany: "Отлично! 🇷🇺\nКак называется ваша компания? Напишите одним сообщением.",
     ready: (c) =>
-      `Готово, «${c}»! ✅\n\nТеперь просто напишите вашу задачу или вопрос — так же, как написали бы своему бухгалтеру. Можно сразу приложить файлы или скриншоты 📎`,
-    idleHint: "Напишите новую задачу текстом — можно приложить файлы или скриншоты 📎",
+      `Готово, «${c}»! ✅\n\nВыберите услугу из меню ниже — или напишите любое сообщение, и меню появится само. Файлы и скриншоты можно приложить после выбора 📎`,
+    idleHint: "Нажмите «📝 Новая задача» и выберите услугу — или просто напишите, меню появится само 👇",
     draftPrompt: "Приложите файл/скриншот или отправляйте 👇",
     draftWithFiles: (n) => `📎 Файлов: ${n}. Добавьте ещё или отправляйте 👇`,
     needText: "Добавьте, пожалуйста, короткое текстовое описание задачи — так бухгалтер быстрее поймёт, что нужно сделать ✍️",
     btnSubmit: "🚀 Отправить задачу",
     btnCancel: "✖️ Отменить",
-    canceled: "Черновик удалён. Напишите новую задачу, когда будете готовы.",
+    canceled: "Черновик удалён. Когда будете готовы — нажмите «📝 Новая задача» 👇",
     created: (n) =>
       `✅ Задача №${n} принята!\n\nМы назначим бухгалтера и напишем вам здесь. Если хотите что-то добавить — ответьте на это сообщение.`,
     assigned: (n, name) => `👩‍💼 По задаче №${n} назначен бухгалтер: ${name}. Уже в работе!`,
@@ -298,14 +298,14 @@ const T = {
     fromAcc: (n) => `💬 Ответ бухгалтера по задаче №${n}:`,
     replyRouted: (n) => `✉️ Передали бухгалтеру (задача №${n}).`,
     help:
-      "ℹ️ Как это работает:\n\n1️⃣ Напишите задачу текстом (можно с файлами)\n2️⃣ Нажмите «Отправить задачу»\n3️⃣ Бухгалтер получит её и ответит здесь\n\nКоманды:\n/new — новая задача\n/tasks — мои задачи\n/company — изменить компанию\n/lang — сменить язык\n/help — помощь",
+      "ℹ️ <b>Как это работает</b>\n\n1️⃣ Выберите услугу из меню (для свободной задачи — «📝 Другое»)\n2️⃣ Опишите детали, приложите файлы и нажмите «Отправить»\n3️⃣ Бухгалтер получит задачу и ответит здесь же\n\n<b>Команды:</b>\n/new — новая задача\n/tasks — мои задачи\n/company — изменить компанию\n/lang — сменить язык\n/help — помощь",
     langSaved: "Язык сохранён 🇷🇺",
     menu: { newTask: "📝 Новая задача", myTasks: "📋 Мои задачи", lang: "🌐 Язык", help: "ℹ️ Помощь" },
     activeTitle: "🔥 Актуальные:",
     historyTitle: "🗂 История:",
     reuseHint: "Нажмите 🔁 чтобы повторить задачу из истории.",
     reuseDraft: (n) => `🔁 Черновик из задачи №${n}. Дополните или отправляйте 👇`,
-    noTasks: "У вас пока нет задач. Просто напишите, что нужно сделать 👇",
+    noTasks: "У вас пока нет задач. Нажмите «📝 Новая задача» и выберите услугу 👇",
     askPhone: "И последнее: отправьте номер телефона — по нему мы точно привяжем вас к вашей компании в системе 📱",
     btnShareContact: "📱 Отправить мой номер",
     btnSkip: "Пропустить",
@@ -321,7 +321,7 @@ const T = {
     askCompany: "Ajoyib! 🇺🇿\nKompaniyangiz nomi qanday? Bitta xabar bilan yozing.",
     ready: (c) =>
       `Tayyor, «${c}»! ✅\n\nEndi vazifangizni yoki savolingizni yozing — xuddi buxgalteringizga yozgandek. Fayl yoki skrinshot ham qo'shishingiz mumkin 📎`,
-    idleHint: "Yangi vazifani matn bilan yozing — fayl yoki skrinshot qo'shish mumkin 📎",
+    idleHint: "«📝 Yangi vazifa» tugmasini bosib xizmatni tanlang — yoki shunchaki yozing, menyu o'zi chiqadi 👇",
     draftPrompt: "Fayl/skrinshot qo'shing yoki yuboring 👇",
     draftWithFiles: (n) => `📎 Fayllar: ${n}. Yana qo'shing yoki yuboring 👇`,
     needText: "Iltimos, vazifaning qisqacha matnli tavsifini qo'shing ✍️",
@@ -335,7 +335,7 @@ const T = {
     fromAcc: (n) => `💬 №${n} vazifa bo'yicha buxgalter javobi:`,
     replyRouted: (n) => `✉️ Buxgalterga yetkazildi (№${n} vazifa).`,
     help:
-      "ℹ️ Qanday ishlaydi:\n\n1️⃣ Vazifani matn bilan yozing (fayllar bilan ham bo'ladi)\n2️⃣ «Vazifani yuborish» tugmasini bosing\n3️⃣ Buxgalter uni oladi va shu yerda javob beradi\n\nBuyruqlar:\n/new — yangi vazifa\n/tasks — vazifalarim\n/company — kompaniyani o'zgartirish\n/lang — tilni o'zgartirish\n/help — yordam",
+      "ℹ️ <b>Qanday ishlaydi</b>\n\n1️⃣ Menyudan xizmatni tanlang (erkin vazifa uchun — «📝 Boshqa»)\n2️⃣ Tafsilotlarni yozing, fayl qo'shing va «Yuborish» tugmasini bosing\n3️⃣ Buxgalter vazifani oladi va shu yerda javob beradi\n\n<b>Buyruqlar:</b>\n/new — yangi vazifa\n/tasks — vazifalarim\n/company — kompaniyani o'zgartirish\n/lang — tilni o'zgartirish\n/help — yordam",
     langSaved: "Til saqlandi 🇺🇿",
     menu: { newTask: "📝 Yangi vazifa", myTasks: "📋 Vazifalarim", lang: "🌐 Til", help: "ℹ️ Yordam" },
     activeTitle: "🔥 Joriy:",
@@ -358,7 +358,7 @@ const T = {
     askCompany: "Great! 🇬🇧\nWhat is your company name? Send it in one message.",
     ready: (c) =>
       `All set, “${c}”! ✅\n\nNow just write your task or question — the same way you would text your accountant. Feel free to attach files or screenshots 📎`,
-    idleHint: "Write a new task as text — you can attach files or screenshots 📎",
+    idleHint: "Tap “📝 New task” and pick a service — or just type, the menu will appear 👇",
     draftPrompt: "Attach a file/screenshot or submit 👇",
     draftWithFiles: (n) => `📎 Files: ${n}. Add more or submit 👇`,
     needText: "Please add a short text description of the task ✍️",
@@ -372,7 +372,7 @@ const T = {
     fromAcc: (n) => `💬 Accountant's reply on task #${n}:`,
     replyRouted: (n) => `✉️ Forwarded to your accountant (task #${n}).`,
     help:
-      "ℹ️ How it works:\n\n1️⃣ Write your task as text (files welcome)\n2️⃣ Tap “Submit task”\n3️⃣ An accountant receives it and replies here\n\nCommands:\n/new — new task\n/tasks — my tasks\n/company — change company\n/lang — change language\n/help — help",
+      "ℹ️ <b>How it works</b>\n\n1️⃣ Pick a service from the menu (for a free-form task — “📝 Other”)\n2️⃣ Describe details, attach files and tap “Submit”\n3️⃣ An accountant receives it and replies right here\n\n<b>Commands:</b>\n/new — new task\n/tasks — my tasks\n/company — change company\n/lang — change language\n/help — help",
     langSaved: "Language saved 🇬🇧",
     menu: { newTask: "📝 New task", myTasks: "📋 My tasks", lang: "🌐 Language", help: "ℹ️ Help" },
     activeTitle: "🔥 Active:",
