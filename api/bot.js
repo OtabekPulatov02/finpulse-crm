@@ -137,9 +137,9 @@ async function issueClientPassword(ctx, u) {
           });
           try {
             await sendToGroup((gid) => bot.api.sendMessage(gid,
-              `⚠️ Кто-то представился клиентом компании «${u.company}» с телефоном ${formatPhoneDisplay(phone)}, ` +
-              `но в карточке клиента указан другой телефон (${formatPhoneDisplay(knownPhone)}). ` +
-              `Доступ в CRM не выдан автоматически — проверьте вручную в разделе «Клиенты».`));
+              `⚠️ <b>Конфликт доступа</b>\nКто-то представился клиентом «<b>${escapeHtml(u.company)}</b>» с телефоном <b>${formatPhoneDisplay(phone)}</b>, ` +
+              `но в карточке указан другой: <b>${formatPhoneDisplay(knownPhone)}</b>.\n` +
+              `Доступ не выдан автоматически — 👉 <i>проверьте в CRM → Клиенты → Заявки на доступ</i>.`, { parse_mode: "HTML" }));
           } catch (e) { /* noop */ }
           return null;
         }
@@ -162,8 +162,8 @@ async function issueClientPassword(ctx, u) {
       });
       try {
         await sendToGroup((gid) => bot.api.sendMessage(gid,
-          `⚠️ Телефон ${formatPhoneDisplay(phone)} уже привязан к другой карточке в CRM (компания: «${otherUser?.company || "?"}"). ` +
-          `Новая регистрация: «${u.company}». Доступ в кабинет не выдан автоматически — нужна проверка вручную в разделе «Клиенты».`));
+          `⚠️ <b>Конфликт телефона</b>\n<b>${formatPhoneDisplay(phone)}</b> уже привязан к «<b>${escapeHtml(otherUser?.company || "?")}</b>», ` +
+          `новая регистрация: «<b>${escapeHtml(u.company)}</b>».\nДоступ не выдан — 👉 <i>проверьте в CRM → Клиенты → Заявки на доступ</i>.`, { parse_mode: "HTML" }));
       } catch (e) { /* noop */ }
       return null;
     }
@@ -196,7 +196,7 @@ async function upsertClient(u, telegramId) {
     await logEvent("telegram", "client_conflict", { company: u.company, phone, idByCompany, idByPhone });
     try {
       await sendToGroup((gid) => bot.api.sendMessage(gid,
-        `⚠️ Похоже на дубликат клиента: «${u.company}» — телефон ${formatPhoneDisplay(phone)} уже привязан к другой карточке. Проверьте вручную в разделе «Клиенты».`));
+        `⚠️ <b>Возможный дубликат клиента</b>\n«<b>${escapeHtml(u.company)}</b>» — телефон <b>${formatPhoneDisplay(phone)}</b> уже привязан к другой карточке.\n👉 <i>Проверьте в CRM → Клиенты</i>.`, { parse_mode: "HTML" }));
     } catch (e) { /* noop */ }
     return idByCompany;
   }
@@ -226,8 +226,8 @@ async function upsertClient(u, telegramId) {
       });
       try {
         await sendToGroup((gid) => bot.api.sendMessage(gid,
-          `⚠️ Новый Telegram-аккаунт представился клиентом «${existing.company || u.company}», но карточка уже привязана к другому аккаунту. ` +
-          `Уведомления НЕ переключены на новый аккаунт — при необходимости подтвердите вручную в разделе «Клиенты».`));
+          `⚠️ <b>Смена Telegram-аккаунта</b>\nНовый аккаунт представился клиентом «<b>${escapeHtml(existing.company || u.company)}</b>», но карточка привязана к другому.\n` +
+          `Уведомления <b>не переключены</b> — 👉 <i>подтвердите в CRM → Клиенты → Заявки на доступ</i>.`, { parse_mode: "HTML" }));
       } catch (e) { /* noop */ }
       const mergedSafe = {
         ...existing,
@@ -540,10 +540,10 @@ const T2 = {
     chooseSub: (cat) => `${cat}\nУточните, что нужно сделать:`,
     describeTask: (label) => `✅ ${label}\n\nОпишите детали (суммы, контрагент, сроки) и прикрепите файлы, если есть 📎`,
     freeText: "Опишите вашу задачу свободным текстом 👇",
-    sla: (h) => `⏱ Приняли! Проведём вашу операцию в течение ${h} ч.`,
+    sla: (h) => `⏱ Приняли! Проведём вашу операцию <b>в течение ${h} ч.</b>`,
     afterHours: (a, b) => `🕘 Приём заявок — с ${a}:00 до ${b}:00 (Ташкент). Сейчас нерабочее время.\n\nОтправить заявку на завтра или отменить?`,
     btnDefer: "📅 Отправить на завтра",
-    deferOk: (a, h) => `📅 Заявка принята! Возьмём в работу завтра с ${a}:00 и проведём в течение ${h} ч. — то есть до ~${a + h}:00.`,
+    deferOk: (a, h) => `📅 Заявка принята! Возьмём в работу <b>завтра с ${a}:00</b> и проведём в течение ${h} ч. — до ~${a + h}:00.`,
     askPositionTabs: "Кем вы работаете в компании? Выберите должность 👇",
     askPositionCustom: "Напишите вашу должность ✍️",
     pendingRole: "⏳ Ваш профиль ожидает подтверждения доверенным лицом компании. Отправлять заявки пока нельзя — мы уже отправили запрос, это быстро.",
@@ -561,10 +561,10 @@ const T2 = {
     chooseSub: (cat) => `${cat}\nAniqroq tanlang:`,
     describeTask: (label) => `✅ ${label}\n\nTafsilotlarni yozing (summa, kontragent, muddat) va fayl biriktiring 📎`,
     freeText: "Vazifangizni erkin matnda yozing 👇",
-    sla: (h) => `⏱ Qabul qilindi! Operatsiyangizni ${h} soat ichida bajaramiz.`,
+    sla: (h) => `⏱ Qabul qilindi! Operatsiyangizni <b>${h} soat ichida</b> bajaramiz.`,
     afterHours: (a, b) => `🕘 Arizalar ${a}:00–${b}:00 (Toshkent) qabul qilinadi. Hozir ish vaqti emas.\n\nErtaga yuboraylikmi yoki bekor qilasizmi?`,
     btnDefer: "📅 Ertagaga yuborish",
-    deferOk: (a, h) => `📅 Ariza qabul qilindi! Ertaga ${a}:00 dan ishga olamiz va ${h} soat ichida bajaramiz — ya'ni ~${a + h}:00 gacha.`,
+    deferOk: (a, h) => `📅 Ariza qabul qilindi! <b>Ertaga ${a}:00 dan</b> ishga olamiz va ${h} soat ichida bajaramiz — ~${a + h}:00 gacha.`,
     askPositionTabs: "Kompaniyada kim bo'lib ishlaysiz? Lavozimni tanlang 👇",
     askPositionCustom: "Lavozimingizni yozing ✍️",
     pendingRole: "⏳ Profilingiz kompaniya ishonchli vakili tasdig'ini kutmoqda. Hozircha ariza yuborib bo'lmaydi — so'rov yuborildi.",
@@ -582,10 +582,10 @@ const T2 = {
     chooseSub: (cat) => `${cat}\nBe more specific:`,
     describeTask: (label) => `✅ ${label}\n\nDescribe the details (amounts, counterparty, deadlines) and attach files 📎`,
     freeText: "Describe your task in free text 👇",
-    sla: (h) => `⏱ Got it! We'll process your operation within ${h} h.`,
+    sla: (h) => `⏱ Got it! We'll process your operation <b>within ${h} h.</b>`,
     afterHours: (a, b) => `🕘 Requests are accepted ${a}:00–${b}:00 (Tashkent). It's after hours now.\n\nSend it for tomorrow or cancel?`,
     btnDefer: "📅 Send for tomorrow",
-    deferOk: (a, h) => `📅 Request accepted! We'll take it tomorrow from ${a}:00 and process it within ${h} h — by ~${a + h}:00.`,
+    deferOk: (a, h) => `📅 Request accepted! We'll take it <b>tomorrow from ${a}:00</b> and process it within ${h} h — by ~${a + h}:00.`,
     askPositionTabs: "What's your position at the company? 👇",
     askPositionCustom: "Type your position ✍️",
     pendingRole: "⏳ Your profile is awaiting confirmation by the company's trusted person. You can't send requests yet — we've sent them a request.",
@@ -666,10 +666,11 @@ async function notifyNewCompany(u) {
   try {
     await sendToGroup((gid) => bot.api.sendMessage(
       gid,
-      "🆕 Новый клиент зарегистрировался в боте\n" +
-      "🏢 " + u.company + "\n\n" +
-      "Компании нет в базе CRM — создайте карточку, заполните данные и назначьте ответственного. " +
-      "Телефон клиента — в списке «Ожидают активации»."
+      "🆕 <b>Новый клиент в боте</b>\n" +
+      "🏢 <b>" + escapeHtml(u.company) + "</b>\n\n" +
+      "Компании нет в базе CRM — создайте карточку и назначьте ответственного. " +
+      "Телефон клиента — в списке «Ожидают активации».",
+      { parse_mode: "HTML" }
     ));
   } catch (e) { console.error("notify new company:", e); }
 }
@@ -1039,10 +1040,10 @@ async function createTaskFromDraft(ctx, u, deferred) {
 
   /* Подтверждение клиенту + ожидаемое время */
   await ctx.answerCallbackQuery("✅");
-  const confirm = await ctx.reply(t.created(num));
+  const confirm = await ctx.reply(t.created(num).replace(`№${num}`, `<b>№${num}</b>`), { parse_mode: "HTML" });
   await redis.set(clientRouteKey(ctx.from.id, confirm.message_id), num);
   try {
-    await ctx.reply(deferred ? t2.deferOk(set.workStart, set.slaHours) : t2.sla(set.slaHours));
+    await ctx.reply(deferred ? t2.deferOk(set.workStart, set.slaHours) : t2.sla(set.slaHours), { parse_mode: "HTML" });
   } catch (e) { /* noop */ }
 
   /* Карточка в группу бухгалтеров (без личных данных клиента) */
@@ -1062,7 +1063,9 @@ async function createTaskFromDraft(ctx, u, deferred) {
     let rest = "";
     if (body.length > room) {
       rest = body.slice(room);
-      body = body.slice(0, room) + "… (продолжение ⬇️)";
+      body = "<b>" + body.slice(0, room) + "</b>… <i>(продолжение ⬇️)</i>";
+    } else {
+      body = "<b>" + body + "</b>";
     }
     const gm = await sendToGroup((gid) => bot.api.sendMessage(gid, base + body + tail, { parse_mode: "HTML" }));
     if (!gm) return; // группа не привязана — карточка некуда отправлять
@@ -1210,7 +1213,7 @@ async function requestMemberApproval(ctx, u) {
   } catch (e) { /* noop */ }
   try {
     await sendToGroup((gid) => bot.api.sendMessage(gid,
-      `🙋 Новый сотрудник компании «${u.company}» (${name}${u.position ? ", " + u.position : ""}) просит доступ к отправке заявок. Подтвердить можно в CRM → Клиенты.`));
+      `🙋 <b>Запрос доступа</b>\n«<b>${escapeHtml(u.company)}</b>»: ${escapeHtml(name)}${u.position ? " · " + escapeHtml(u.position) : ""} просит право отправлять заявки.\n👉 <i>Подтвердить: Telegram-кнопка у доверенного лица или CRM → Клиенты</i>.`, { parse_mode: "HTML" }));
   } catch (e) { /* noop */ }
   return ctx.reply(t2.pendingRole);
 }

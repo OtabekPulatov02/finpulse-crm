@@ -591,7 +591,7 @@ async function createTaskFromCrm({ clientId, company, text, assignee, dueDate, t
   const header =
     `🆕 <b>Задача №${num}</b> · ${STATUS_TOP[task.status] || task.status}\n` +
     `🏢 <b>${escapeHtml(finalCompany || "—")}</b>\n━━━━━━━━━━━━\n` +
-    `${escapeHtml(cleanText.slice(0, 3600))}` +
+    `<b>${escapeHtml(cleanText.slice(0, 3600))}</b>` +
     (task.assignee ? `\n\n👩‍💼 <b>Исполнитель:</b> ${escapeHtml(task.assignee)}` : "") +
     `\n✍️ <i>Заведена из CRM: ${escapeHtml(actor || "CRM")}</i>` +
     (task.status === "new" ? `\n👉 <i>Исполнитель и статус — в CRM</i>` : "");
@@ -962,7 +962,7 @@ async function ensureDueReminderTasks() {
               `🔔 <b>Напоминание №${num}</b> · ⚪️ Новая` +
               (evCompany ? `\n🏢 <b>${escapeHtml(evCompany)}</b>` : "") +
               `\n━━━━━━━━━━━━\n` +
-              `${escapeHtml(task.text)}\n\n👉 <i>Исполнитель и статус — в CRM</i>`;
+              `<b>${escapeHtml(task.text)}</b>\n\n👉 <i>Исполнитель и статус — в CRM</i>`;
             const sent = await tgToGroup("sendMessage", { text: header, parse_mode: "HTML" });
             if (sent && sent.ok && sent.result && sent.result.message_id) {
               task.gmsg = sent.result.message_id;
@@ -1083,7 +1083,7 @@ async function updateStatus(num, status, assignee) {
         const header =
           `🆕 <b>Задача №${num}</b> · ${STATUS_TOP[status] || status}\n` +
           `🏢 <b>${escapeHtml(task.company || "—")}</b>\n` + catLine + `━━━━━━━━━━━━\n` +
-          `${escapeHtml(String(task.text).slice(0, 3600))}` +
+          `<b>${escapeHtml(String(task.text).slice(0, 3600))}</b>` +
           (task.files && task.files.length ? `\n\n📎 Вложений: ${task.files.length}` : "") +
           (task.assignee && status !== "new" ? `\n👩‍💼 <b>Исполнитель:</b> ${escapeHtml(task.assignee)}` : "") +
           (status === "new" ? `\n👉 <i>Исполнитель и статус — в CRM</i>` : "");
