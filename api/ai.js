@@ -48,7 +48,9 @@ POST actions:
 - {action:"access_request_resolve", id, approve:true|false}
 - {action:"employee_create", name, phone, role:"admin|accountant"} / {action:"employee_update", id, patch} / {action:"employee_reset_password", id} / {action:"employee_delete", id}
 - {action:"calendar_event_create", type:"tax|pay", title, company?, date, repeat?, remindDays?} / _update / _delete
-onec_get: r=apps | r=ping | r=meta&app=<code> | r=orgs&app=<code>; onec_post: {action:"sync_orgs", app}
+onec_get: r=apps | r=ping | r=meta&app=<code> | r=orgs&app=<code>
+onec_post: {action:"sync_orgs", app} | {action:"execute_task", num} — создаёт НЕПРОВЕДЁННЫЙ документ в 1С базе клиента из AI-черновика задачи (главная операция!) | {action:"create_draft", app, entity, fields}
+Пайплайн выполнения задачи клиента в 1С: 1) crm_get r=tasks — найди задачу; 2) ai_draft {num} — подготовь черновик операции; 3) onec_post {action:"execute_task", num} — создай непроведённый документ в 1С базе клиента; 4) crm_post {action:"status", num, status:"in_progress", assignee:"AI-бухгалтер"} и сообщи, что бухгалтеру осталось проверить и провести.
 
 Правила:
 1. Всегда сначала читай данные (crm_get), потом действуй.
@@ -61,6 +63,7 @@ const AGENT_TOOLS = [
   { type: "function", function: { name: "crm_post", description: "POST к /api/crm. body — объект действия, напр. {\"action\":\"status\",\"num\":106,\"status\":\"done\"}", parameters: { type: "object", properties: { body: { type: "object" } }, required: ["body"] } } },
   { type: "function", function: { name: "onec_get", description: "GET к /api/1c (интеграция 1С). query напр. \"r=ping\"", parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } } },
   { type: "function", function: { name: "onec_post", description: "POST к /api/1c, напр. {\"action\":\"sync_orgs\",\"app\":\"46516\"}", parameters: { type: "object", properties: { body: { type: "object" } }, required: ["body"] } } },
+  { type: "function", function: { name: "ai_draft", description: "Сгенерировать AI-черновик операции для задачи CRM (сохраняется в task.aiDraft). Аргумент num — номер задачи.", parameters: { type: "object", properties: { num: { type: "number" } }, required: ["num"] } } },
 ];
 
 async function callTool(name, args, authHeader) {
@@ -107,7 +110,28 @@ async function runAgent(messages, authHeader) {
     for (const tc of msg.tool_calls) {
       let args = {};
       try { args = JSON.parse(tc.function.arguments || "{}"); } catch (e) { /* noop */ }
-      const result = await callTool(tc.function.name, args, authHeader);
+      let result;
+      if (tc.function.name === "ai_draft") {
+        try {
+          const task = await redis.get("task:" + Number(args.num));
+          if (!task) { result = JSON.stringify({ ok: false, error: "task not found" }); }
+          else {
+            let clientInfo = null;
+            try {
+              const cid = await redis.get("clientcompany:" + String(task.company || "").toLowerCase().replace(/[^a-zа-яё0-9]+/gi, " ").trim());
+              if (cid) clientInfo = await redis.get("client:" + cid);
+            } catch (e) { /* noop */ }
+            const draft = await draftFromTask(task, clientInfo);
+            if (draft) {
+              task.aiDraft = { ...draft, generatedAt: new Date().toISOString(), by: "AI-агент" };
+              await redis.set("task:" + Number(args.num), task);
+              result = JSON.stringify({ ok: true, draft: task.aiDraft });
+            } else result = JSON.stringify({ ok: false, error: "не удалось подготовить черновик" });
+          }
+        } catch (e) { result = JSON.stringify({ ok: false, error: String(e).slice(0, 200) }); }
+      } else {
+        result = await callTool(tc.function.name, args, authHeader);
+      }
       steps.push({ tool: tc.function.name, args: JSON.stringify(args).slice(0, 200), ok: !result.includes('"ok":false') });
       convo.push({ role: "tool", tool_call_id: tc.id, content: result });
     }

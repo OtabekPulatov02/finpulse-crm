@@ -133,6 +133,7 @@ async function syncOrgs(appPath, appName, actor) {
       const next = { ...c, inn: c.inn || org.inn, source1c: { app: appPath, ref: org.ref, name: org.name }, updatedAt: new Date().toISOString() };
       await redis.set("client:" + existingId, next);
       updated++;
+      await redis.set("1c:orgmap:" + norm, { app: appPath, ref: org.ref, name: org.name });
     } else {
       const id = "c" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
       await redis.set("client:" + id, {
@@ -143,11 +144,91 @@ async function syncOrgs(appPath, appName, actor) {
       });
       await redis.set("clientcompany:" + norm, id);
       await redis.sadd("clients", id);
+      await redis.set("1c:orgmap:" + norm, { app: appPath, ref: org.ref, name: org.name });
       created++;
     }
   }
   await logEvent("1c_sync_orgs", { app: appName, created, updated, total: res.orgs.length, by: actor || "CRM" });
   return { ok: true, created, updated, total: res.orgs.length };
+}
+
+
+/* ---------------- Исполнитель: создание документов 1С из задач CRM ----------------
+   ГЛАВНАЯ ФИЧА: AI разобрал задачу клиента → черновик → документ в базе 1С
+   этого клиента (НЕПРОВЕДЁННЫЙ, Posted=false) → бухгалтер проверяет и
+   проводит. Точные имена реквизитов сверяются с $metadata после включения
+   состава OData провайдером. */
+
+const DOC_1C_TYPES = {
+  payment_out: "Document_ПлатежноеПоручениеИсходящее",
+  payment_in: "Document_ПлатежноеПоручениеВходящее",
+  invoice_esf: "Document_СчетФактураВыданный",
+  schet: "Document_СчетНаОплатуПокупателю",
+  postuplenie: "Document_ПоступлениеТоваровУслуг",
+  realizatsiya: "Document_РеализацияТоваровУслуг",
+  act_sverki: "Document_АктСверкиВзаиморасчетов",
+  doverennost: "Document_Доверенность",
+};
+
+async function orgFor(company) {
+  const norm = normCompany(company || "");
+  if (!norm) return null;
+  return await redis.get("1c:orgmap:" + norm);
+}
+
+/* Универсальное создание документа (черновик, Posted=false) */
+async function createDraftDoc(appPath, entity, fields) {
+  const url = `${BASE}${appPath}/odata/standard.odata/${entity}?$format=json`;
+  const payload = { ...fields, Posted: false };
+  const r = await fetch(url, {
+    method: "POST",
+    headers: { Authorization: authHeader(), Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(25000),
+  });
+  const text = await r.text();
+  let json = null;
+  try { json = JSON.parse(text); } catch (e) { /* noop */ }
+  if (r.status === 404) return { ok: false, error: `${entity} не включён в состав OData — ждём поддержку Clobus` };
+  if (r.status === 401) return { ok: false, error: "auth: проверьте ODATA_1C_LOGIN/PASSWORD" };
+  if (r.status >= 400) return { ok: false, error: `HTTP ${r.status}: ${text.slice(0, 300)}` };
+  return { ok: true, ref: json?.Ref_Key || null, number: json?.Number || null, raw: json };
+}
+
+/* Выполнение задачи CRM: черновик AI → документ в 1С базе клиента */
+async function executeTaskIn1C(num, actor) {
+  const task = await redis.get("task:" + num);
+  if (!task) return { ok: false, error: "task not found" };
+  const draft = task.aiDraft;
+  if (!draft || !draft.type) return { ok: false, error: "у задачи нет AI-черновика — сначала POST /api/ai {action:'draft', num}" };
+  const entity = DOC_1C_TYPES[draft.type];
+  if (!entity) return { ok: false, error: `тип «${draft.type}» пока не маппится на документ 1С` };
+  const org = await orgFor(task.company);
+  if (!org) return { ok: false, error: `организация «${task.company}» не найдена в картах 1С — выполните синк организаций` };
+
+  /* Базовые поля, общие для документов БУ УЗ 3.0. Точная схема реквизитов
+     (контрагент, счета, суммы по табличным частям) дозаполняется после
+     $metadata; всё содержимое черновика кладём в Комментарий, чтобы
+     бухгалтер открыл документ с полным контекстом. */
+  const comment =
+    `[Finpulse CRM · задача №${num}] ${draft.title || ""}\n` +
+    (draft.counterparty ? `Контрагент: ${draft.counterparty}${draft.counterpartyInn ? " (ИНН " + draft.counterpartyInn + ")" : ""}\n` : "") +
+    (draft.amount ? `Сумма: ${draft.amount} UZS${draft.vat ? " · НДС " + draft.vat : ""}\n` : "") +
+    (draft.purpose ? `Назначение: ${draft.purpose}\n` : "") +
+    `Подготовлено AI-бухгалтером, проверьте и проведите.`;
+
+  const fields = {
+    Date: new Date().toISOString().slice(0, 19),
+    "Организация_Key": org.ref,
+    "Комментарий": comment.slice(0, 1000),
+  };
+  const r = await createDraftDoc(org.app, entity, fields);
+  if (!r.ok) return r;
+
+  task.doc1c = { app: org.app, entity, ref: r.ref, number: r.number, at: new Date().toISOString(), by: actor || "AI" };
+  await redis.set("task:" + num, task);
+  await logEvent("1c_draft_created", { num, entity, app: org.app, ref: r.ref, by: actor || "AI" });
+  return { ok: true, entity, ref: r.ref, number: r.number, app: org.app };
 }
 
 /* ---------------- handler ---------------- */
@@ -202,6 +283,14 @@ module.exports = async (req, res) => {
     if (req.method === "POST") {
       let body = req.body;
       if (typeof body === "string") { try { body = JSON.parse(body); } catch { body = {}; } }
+      if (body && body.action === "execute_task" && body.num) {
+        return res.status(200).json(await executeTaskIn1C(Number(body.num), authUser?.name));
+      }
+      if (body && body.action === "create_draft" && body.app && body.entity) {
+        const a = findApp(body.app);
+        if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
+        return res.status(200).json(await createDraftDoc(a.path, String(body.entity), body.fields || {}));
+      }
       if (body && body.action === "sync_orgs" && body.app) {
         const a = findApp(body.app);
         if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
