@@ -458,6 +458,22 @@ function inWorkHours(set) {
   return h >= set.workStart && h < set.workEnd;
 }
 
+/* Дедлайн SLA с учётом окна приёма: если до конца рабочего дня времени
+   не хватает, остаток переносится на завтра с открытия. */
+function slaDeadline(set) {
+  const now = localHour(set);
+  const fmt = (hFloat) => {
+    const h = Math.floor(hFloat) % 24;
+    const m = Math.round((hFloat - Math.floor(hFloat)) * 60);
+    return String(h).padStart(2, "0") + ":" + String(m).padStart(2, "0");
+  };
+  const end = now + set.slaHours;
+  if (end <= set.workEnd) return { time: fmt(end), tomorrow: false };
+  const remaining = set.slaHours - Math.max(0, set.workEnd - now);
+  const t = Math.min(set.workStart + remaining, set.workEnd);
+  return { time: fmt(t), tomorrow: true };
+}
+
 /* ---------------- Категории услуг (редактируются в CRM) ---------------- */
 const DEFAULT_CATEGORIES = [
   { id: "pay", name: "💸 Оплатить / платёжка", subs: ["Оплатить счёт поставщика", "Оплата налога", "Перевод между счетами", "Выплата зарплаты"] },
@@ -543,7 +559,7 @@ const T2 = {
     chooseSub: (cat) => `${cat}\nУточните, что нужно сделать:`,
     describeTask: (label) => `✅ ${label}\n\nОпишите детали (суммы, контрагент, сроки) и прикрепите файлы, если есть 📎`,
     freeText: "Опишите вашу задачу свободным текстом 👇",
-    sla: (h, tm) => `⏱ Приняли! Проведём вашу операцию <b>в течение ${h} ч.</b>${tm ? ` — до ~<b>${tm}</b>` : ""}`,
+    sla: (h, tm, tmr) => `⏱ Приняли! Проведём вашу операцию <b>в течение ${h} рабочих ч.</b>${tm ? (tmr ? ` — <b>завтра до ~${tm}</b>` : ` — до ~<b>${tm}</b>`) : ""}`,
     afterHours: (a, b) => `🕘 Приём заявок — с ${a}:00 до ${b}:00 (Ташкент). Сейчас нерабочее время.\n\nОтправить заявку на завтра или отменить?`,
     btnDefer: "📅 Отправить на завтра",
     deferOk: (a, h) => `📅 Заявка принята! Возьмём в работу <b>завтра с ${a}:00</b> и проведём в течение ${h} ч. — до ~${a + h}:00.`,
@@ -564,7 +580,7 @@ const T2 = {
     chooseSub: (cat) => `${cat}\nAniqroq tanlang:`,
     describeTask: (label) => `✅ ${label}\n\nTafsilotlarni yozing (summa, kontragent, muddat) va fayl biriktiring 📎`,
     freeText: "Vazifangizni erkin matnda yozing 👇",
-    sla: (h, tm) => `⏱ Qabul qilindi! Operatsiyangizni <b>${h} soat ichida</b> bajaramiz${tm ? ` — ~<b>${tm}</b> gacha` : ""}.`,
+    sla: (h, tm, tmr) => `⏱ Qabul qilindi! Operatsiyangizni <b>${h} ish soati ichida</b> bajaramiz${tm ? (tmr ? ` — <b>ertaga ~${tm} gacha</b>` : ` — ~<b>${tm}</b> gacha`) : ""}.`,
     afterHours: (a, b) => `🕘 Arizalar ${a}:00–${b}:00 (Toshkent) qabul qilinadi. Hozir ish vaqti emas.\n\nErtaga yuboraylikmi yoki bekor qilasizmi?`,
     btnDefer: "📅 Ertagaga yuborish",
     deferOk: (a, h) => `📅 Ariza qabul qilindi! <b>Ertaga ${a}:00 dan</b> ishga olamiz va ${h} soat ichida bajaramiz — ~${a + h}:00 gacha.`,
@@ -585,7 +601,7 @@ const T2 = {
     chooseSub: (cat) => `${cat}\nBe more specific:`,
     describeTask: (label) => `✅ ${label}\n\nDescribe the details (amounts, counterparty, deadlines) and attach files 📎`,
     freeText: "Describe your task in free text 👇",
-    sla: (h, tm) => `⏱ Got it! We'll process your operation <b>within ${h} h</b>${tm ? ` — by ~<b>${tm}</b>` : ""}.`,
+    sla: (h, tm, tmr) => `⏱ Got it! We'll process your operation <b>within ${h} working h</b>${tm ? (tmr ? ` — <b>tomorrow by ~${tm}</b>` : ` — by ~<b>${tm}</b>`) : ""}.`,
     afterHours: (a, b) => `🕘 Requests are accepted ${a}:00–${b}:00 (Tashkent). It's after hours now.\n\nSend it for tomorrow or cancel?`,
     btnDefer: "📅 Send for tomorrow",
     deferOk: (a, h) => `📅 Request accepted! We'll take it <b>tomorrow from ${a}:00</b> and process it within ${h} h — by ~${a + h}:00.`,
@@ -1046,9 +1062,8 @@ async function createTaskFromDraft(ctx, u, deferred) {
   const confirm = await ctx.reply(t.created(num).replace(`№${num}`, `<b>№${num}</b>`), { parse_mode: "HTML" });
   await redis.set(clientRouteKey(ctx.from.id, confirm.message_id), num);
   try {
-    const doneBy = new Date(Date.now() + (set.tzOffset || 5) * 3600e3 + set.slaHours * 3600e3);
-    const doneStr = String(doneBy.getUTCHours()).padStart(2, "0") + ":" + String(doneBy.getUTCMinutes()).padStart(2, "0");
-    await ctx.reply(deferred ? t2.deferOk(set.workStart, set.slaHours) : t2.sla(set.slaHours, doneStr), { parse_mode: "HTML" });
+    const dl = slaDeadline(set);
+    await ctx.reply(deferred ? t2.deferOk(set.workStart, set.slaHours) : t2.sla(set.slaHours, dl.time, dl.tomorrow), { parse_mode: "HTML" });
   } catch (e) { /* noop */ }
 
   /* Карточка в группу бухгалтеров (без личных данных клиента) */
