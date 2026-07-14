@@ -1563,14 +1563,16 @@ bot.on("message", async (ctx) => {
     }
   }
 
-  /* Быстрый флоу создания задачи */
+  /* Любое сообщение вне черновика → сначала выбор категории услуги.
+     Свободный текст принимается только внутри черновика (после выбора
+     категории; для произвольных задач есть категория «Другое»). */
+  if (u.state !== "draft") {
+    const cats = await getCategories();
+    return ctx.reply(t2of(u).chooseCategory, { reply_markup: catsKb(cats) });
+  }
+
   const text = (msg.text || msg.caption || "").trim();
   const file = extractFile(msg);
-
-  if (u.state !== "draft") {
-    u.state = "draft";
-    u.draft = { text: "", files: [] };
-  }
   if (text) u.draft.text = u.draft.text ? u.draft.text + "\n" + text : text;
   if (file && u.draft.files.length < 10) u.draft.files.push(file);
   await setUser(ctx.from.id, u);
