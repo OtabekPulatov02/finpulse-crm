@@ -301,8 +301,8 @@ const T = {
       "ℹ️ <b>Как это работает</b>\n\n1️⃣ Выберите услугу из меню (для свободной задачи — «📝 Другое»)\n2️⃣ Опишите детали, приложите файлы и нажмите «Отправить»\n3️⃣ Бухгалтер получит задачу и ответит здесь же\n\n<b>Команды:</b>\n/new — новая задача\n/tasks — мои задачи\n/company — изменить компанию\n/lang — сменить язык\n/help — помощь",
     langSaved: "Язык сохранён 🇷🇺",
     menu: { newTask: "📝 Новая задача", myTasks: "📋 Мои задачи", lang: "🌐 Язык", help: "ℹ️ Помощь" },
-    activeTitle: "🔥 Актуальные:",
-    historyTitle: "🗂 История:",
+    activeTitle: "🔥 <b>Актуальные</b>",
+    historyTitle: "🗂 <b>История</b>",
     reuseHint: "Нажмите 🔁 чтобы повторить задачу из истории.",
     reuseDraft: (n) => `🔁 Черновик из задачи №${n}. Дополните или отправляйте 👇`,
     noTasks: "У вас пока нет задач. Нажмите «📝 Новая задача» и выберите услугу 👇",
@@ -339,7 +339,7 @@ const T = {
     langSaved: "Til saqlandi 🇺🇿",
     menu: { newTask: "📝 Yangi vazifa", myTasks: "📋 Vazifalarim", lang: "🌐 Til", help: "ℹ️ Yordam" },
     activeTitle: "🔥 Joriy:",
-    historyTitle: "🗂 Tarix:",
+    historyTitle: "🗂 <b>Tarix</b>",
     reuseHint: "Tarixdagi vazifani takrorlash uchun 🔁 bosing.",
     reuseDraft: (n) => `🔁 №${n} vazifadan qoralama. To'ldiring yoki yuboring 👇`,
     noTasks: "Hozircha vazifalar yo'q. Nima qilish kerakligini yozing 👇",
@@ -375,8 +375,8 @@ const T = {
       "ℹ️ <b>How it works</b>\n\n1️⃣ Pick a service from the menu (for a free-form task — “📝 Other”)\n2️⃣ Describe details, attach files and tap “Submit”\n3️⃣ An accountant receives it and replies right here\n\n<b>Commands:</b>\n/new — new task\n/tasks — my tasks\n/company — change company\n/lang — change language\n/help — help",
     langSaved: "Language saved 🇬🇧",
     menu: { newTask: "📝 New task", myTasks: "📋 My tasks", lang: "🌐 Language", help: "ℹ️ Help" },
-    activeTitle: "🔥 Active:",
-    historyTitle: "🗂 History:",
+    activeTitle: "🔥 <b>Active</b>",
+    historyTitle: "🗂 <b>History</b>",
     reuseHint: "Tap 🔁 to reuse a task from history.",
     reuseDraft: (n) => `🔁 Draft from task #${n}. Edit or submit 👇`,
     noTasks: "No tasks yet. Just write what needs to be done 👇",
@@ -394,12 +394,15 @@ const T = {
 };
 
 const LANG_KB = new InlineKeyboard()
-  .text("🇷🇺 Русский", "lang:ru")
-  .text("🇺🇿 O'zbekcha", "lang:uz")
+  .text("🇷🇺 Русский", "lang:ru").row()
+  .text("🇺🇿 O'zbekcha", "lang:uz").row()
   .text("🇬🇧 English", "lang:en");
 
 const HELLO =
-  "👋 Здравствуйте! Это бот бухгалтерии «Finpulse».\nAssalomu alaykum! Bu «Finpulse» buxgalteriya boti.\nHello! This is the Finpulse accounting bot.\n\nВыберите язык / Tilni tanlang / Choose a language:";
+  "👋 <b>Здравствуйте!</b> Это бот бухгалтерии «Finpulse».\n" +
+  "🇺🇿 <b>Assalomu alaykum!</b> Bu «Finpulse» buxgalteriya boti.\n" +
+  "🇬🇧 <b>Hello!</b> This is the Finpulse accounting bot.\n\n" +
+  "Выберите язык · Tilni tanlang · Choose a language 👇";
 
 /* ---------------- Хранилище ---------------- */
 const userKey = (id) => `user:${id}`;
@@ -540,7 +543,7 @@ const T2 = {
     chooseSub: (cat) => `${cat}\nУточните, что нужно сделать:`,
     describeTask: (label) => `✅ ${label}\n\nОпишите детали (суммы, контрагент, сроки) и прикрепите файлы, если есть 📎`,
     freeText: "Опишите вашу задачу свободным текстом 👇",
-    sla: (h) => `⏱ Приняли! Проведём вашу операцию <b>в течение ${h} ч.</b>`,
+    sla: (h, tm) => `⏱ Приняли! Проведём вашу операцию <b>в течение ${h} ч.</b>${tm ? ` — до ~<b>${tm}</b>` : ""}`,
     afterHours: (a, b) => `🕘 Приём заявок — с ${a}:00 до ${b}:00 (Ташкент). Сейчас нерабочее время.\n\nОтправить заявку на завтра или отменить?`,
     btnDefer: "📅 Отправить на завтра",
     deferOk: (a, h) => `📅 Заявка принята! Возьмём в работу <b>завтра с ${a}:00</b> и проведём в течение ${h} ч. — до ~${a + h}:00.`,
@@ -561,7 +564,7 @@ const T2 = {
     chooseSub: (cat) => `${cat}\nAniqroq tanlang:`,
     describeTask: (label) => `✅ ${label}\n\nTafsilotlarni yozing (summa, kontragent, muddat) va fayl biriktiring 📎`,
     freeText: "Vazifangizni erkin matnda yozing 👇",
-    sla: (h) => `⏱ Qabul qilindi! Operatsiyangizni <b>${h} soat ichida</b> bajaramiz.`,
+    sla: (h, tm) => `⏱ Qabul qilindi! Operatsiyangizni <b>${h} soat ichida</b> bajaramiz${tm ? ` — ~<b>${tm}</b> gacha` : ""}.`,
     afterHours: (a, b) => `🕘 Arizalar ${a}:00–${b}:00 (Toshkent) qabul qilinadi. Hozir ish vaqti emas.\n\nErtaga yuboraylikmi yoki bekor qilasizmi?`,
     btnDefer: "📅 Ertagaga yuborish",
     deferOk: (a, h) => `📅 Ariza qabul qilindi! <b>Ertaga ${a}:00 dan</b> ishga olamiz va ${h} soat ichida bajaramiz — ~${a + h}:00 gacha.`,
@@ -582,7 +585,7 @@ const T2 = {
     chooseSub: (cat) => `${cat}\nBe more specific:`,
     describeTask: (label) => `✅ ${label}\n\nDescribe the details (amounts, counterparty, deadlines) and attach files 📎`,
     freeText: "Describe your task in free text 👇",
-    sla: (h) => `⏱ Got it! We'll process your operation <b>within ${h} h.</b>`,
+    sla: (h, tm) => `⏱ Got it! We'll process your operation <b>within ${h} h</b>${tm ? ` — by ~<b>${tm}</b>` : ""}.`,
     afterHours: (a, b) => `🕘 Requests are accepted ${a}:00–${b}:00 (Tashkent). It's after hours now.\n\nSend it for tomorrow or cancel?`,
     btnDefer: "📅 Send for tomorrow",
     deferOk: (a, h) => `📅 Request accepted! We'll take it <b>tomorrow from ${a}:00</b> and process it within ${h} h — by ~${a + h}:00.`,
@@ -734,7 +737,7 @@ async function sendLong(ctx, text, opts) {
   let last;
   for (let i = 0; i < text.length; i += LIMIT) {
     const isLast = i + LIMIT >= text.length;
-    last = await ctx.reply(text.slice(i, i + LIMIT), isLast ? opts : undefined);
+    last = await ctx.reply(text.slice(i, i + LIMIT), isLast ? opts : (opts && opts.parse_mode ? { parse_mode: opts.parse_mode } : undefined));
   }
   return last;
 }
@@ -753,10 +756,10 @@ async function listTasks(ctx, u) {
   if (!active.length && !history.length) return ctx.reply(t.noTasks, { reply_markup: mainKb(u.lang) });
 
   const block = (task) =>
-    (STATUS_EMOJI[task.status] || "⚪️") + " №" + task.num +
-    (task.assignee ? " · 👩‍💼 " + task.assignee : "") +
+    (STATUS_EMOJI[task.status] || "⚪️") + " <b>№" + task.num + "</b>" +
+    (task.assignee ? " · 👩‍💼 " + escapeHtml(task.assignee) : "") +
     (task.files && task.files.length ? " · 📎" + task.files.length : "") +
-    "\n" + (task.text || "");
+    "\n" + escapeHtml(task.text || "");
 
   const parts = [];
   if (active.length) {
@@ -772,7 +775,7 @@ async function listTasks(ctx, u) {
 
   const withFiles = [...active, ...history].filter((x) => x.files && x.files.length).slice(0, 6);
 
-  let opts = { reply_markup: mainKb(u.lang) };
+  let opts = { reply_markup: mainKb(u.lang), parse_mode: "HTML" };
   if (history.length || withFiles.length) {
     const kb = new InlineKeyboard();
     history.slice(0, 5).forEach((task, i) => {
@@ -784,7 +787,7 @@ async function listTasks(ctx, u) {
       kb.text("📎 №" + task.num, "files:" + task.num);
       if (i % 3 === 2) kb.row();
     });
-    opts = { reply_markup: kb };
+    opts = { reply_markup: kb, parse_mode: "HTML" };
   }
   return sendLong(ctx, parts.join("\n\n"), opts);
 }
@@ -844,12 +847,12 @@ bot.command("start", async (ctx) => {
     return ctx.reply(T[u.lang].idleHint, { reply_markup: mainKb(u.lang) });
   }
   await setUser(ctx.from.id, { state: "lang" });
-  return ctx.reply(HELLO, { reply_markup: LANG_KB });
+  return ctx.reply(HELLO, { reply_markup: LANG_KB, parse_mode: "HTML" });
 });
 
 bot.command("lang", async (ctx) => {
   if (!isPrivate(ctx)) return;
-  return ctx.reply(HELLO, { reply_markup: LANG_KB });
+  return ctx.reply(HELLO, { reply_markup: LANG_KB, parse_mode: "HTML" });
 });
 
 bot.command("help", async (ctx) => {
@@ -862,7 +865,7 @@ bot.command("help", async (ctx) => {
 bot.command(["new", "cancel"], async (ctx) => {
   if (!isPrivate(ctx)) return;
   const u = await getUser(ctx.from.id);
-  if (!u || !u.lang) return ctx.reply(HELLO, { reply_markup: LANG_KB });
+  if (!u || !u.lang) return ctx.reply(HELLO, { reply_markup: LANG_KB, parse_mode: "HTML" });
   u.state = "idle";
   u.draft = null;
   await setUser(ctx.from.id, u);
@@ -872,14 +875,14 @@ bot.command(["new", "cancel"], async (ctx) => {
 bot.command("tasks", async (ctx) => {
   if (!isPrivate(ctx)) return;
   const u = await getUser(ctx.from.id);
-  if (!u || !u.lang) return ctx.reply(HELLO, { reply_markup: LANG_KB });
+  if (!u || !u.lang) return ctx.reply(HELLO, { reply_markup: LANG_KB, parse_mode: "HTML" });
   return listTasks(ctx, u);
 });
 
 bot.command("company", async (ctx) => {
   if (!isPrivate(ctx)) return;
   const u = await getUser(ctx.from.id);
-  if (!u || !u.lang) return ctx.reply(HELLO, { reply_markup: LANG_KB });
+  if (!u || !u.lang) return ctx.reply(HELLO, { reply_markup: LANG_KB, parse_mode: "HTML" });
   u.state = "company";
   await setUser(ctx.from.id, u);
   return ctx.reply(T[u.lang].askCompany);
@@ -888,7 +891,7 @@ bot.command("company", async (ctx) => {
 bot.command("password", async (ctx) => {
   if (!isPrivate(ctx)) return;
   const u = await getUser(ctx.from.id);
-  if (!u || !u.lang) return ctx.reply(HELLO, { reply_markup: LANG_KB });
+  if (!u || !u.lang) return ctx.reply(HELLO, { reply_markup: LANG_KB, parse_mode: "HTML" });
   if (!u.phone) return ctx.reply(T[u.lang].askPhone, { reply_markup: phoneKb(T[u.lang]) });
   const password = await issueClientPassword(ctx, u);
   await setUser(ctx.from.id, u);
@@ -1043,7 +1046,9 @@ async function createTaskFromDraft(ctx, u, deferred) {
   const confirm = await ctx.reply(t.created(num).replace(`№${num}`, `<b>№${num}</b>`), { parse_mode: "HTML" });
   await redis.set(clientRouteKey(ctx.from.id, confirm.message_id), num);
   try {
-    await ctx.reply(deferred ? t2.deferOk(set.workStart, set.slaHours) : t2.sla(set.slaHours), { parse_mode: "HTML" });
+    const doneBy = new Date(Date.now() + (set.tzOffset || 5) * 3600e3 + set.slaHours * 3600e3);
+    const doneStr = String(doneBy.getUTCHours()).padStart(2, "0") + ":" + String(doneBy.getUTCMinutes()).padStart(2, "0");
+    await ctx.reply(deferred ? t2.deferOk(set.workStart, set.slaHours) : t2.sla(set.slaHours, doneStr), { parse_mode: "HTML" });
   } catch (e) { /* noop */ }
 
   /* Карточка в группу бухгалтеров (без личных данных клиента) */
@@ -1438,7 +1443,7 @@ bot.on("message", async (ctx) => {
   let u = await getUser(ctx.from.id);
   if (!u || !u.lang) {
     await setUser(ctx.from.id, { state: "lang" });
-    return ctx.reply(HELLO, { reply_markup: LANG_KB });
+    return ctx.reply(HELLO, { reply_markup: LANG_KB, parse_mode: "HTML" });
   }
   const t = T[u.lang];
 
@@ -1511,7 +1516,7 @@ bot.on("message", async (ctx) => {
         return ctx.reply(t2of(u).chooseCategory, { reply_markup: catsKb(cats) });
       }
       if (plain === M.myTasks) return listTasks(ctx, u);
-      if (plain === M.lang) return ctx.reply(HELLO, { reply_markup: LANG_KB });
+      if (plain === M.lang) return ctx.reply(HELLO, { reply_markup: LANG_KB, parse_mode: "HTML" });
       if (plain === M.help) return ctx.reply(t.help + crmAccessBlock(u), { parse_mode: "HTML", reply_markup: mainKb(u.lang) });
     }
   }
