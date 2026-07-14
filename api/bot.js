@@ -1047,21 +1047,24 @@ async function createTaskFromDraft(ctx, u, deferred) {
 
   /* Карточка в группу бухгалтеров (без личных данных клиента) */
   try {
-    const catLine = task.category ? `🗂 ${task.category}${task.sub ? " / " + task.sub : ""}\n` : "";
-    const base = `🆕 Задача №${num}\n🏢 Компания: ${task.company}\n${catLine}——————————\n`;
+    const catLine = task.category ? `🗂 ${escapeHtml(task.category)}${task.sub ? " · " + escapeHtml(task.sub) : ""}\n` : "";
+    const base =
+      `🆕 <b>Задача №${num}</b> · ⚪️ Новая\n` +
+      `🏢 <b>${escapeHtml(task.company || "—")}</b>\n` +
+      catLine +
+      `━━━━━━━━━━━━\n`;
     const tail =
-      (task.files.length ? `\n📎 Вложений: ${task.files.length}` : "") +
-      (deferred ? `\n⏸ Получена вне часов приёма — в работу с ${set.workStart}:00` : "") +
-      `\n\n⚪️ Статус: Новая` +
-      `\n👉 Назначьте исполнителя и статус — в CRM.`;
-    const room = 3900 - base.length - tail.length;
-    let body = task.text;
+      (task.files.length ? `\n\n📎 Вложений: ${task.files.length}` : "") +
+      (deferred ? `\n⏸ <i>Получена вне часов приёма — в работу с ${set.workStart}:00</i>` : "") +
+      `\n\n👉 <i>Исполнитель и статус — в CRM</i>`;
+    const room = 3700 - base.length - tail.length;
+    let body = escapeHtml(task.text);
     let rest = "";
     if (body.length > room) {
       rest = body.slice(room);
       body = body.slice(0, room) + "… (продолжение ⬇️)";
     }
-    const gm = await sendToGroup((gid) => bot.api.sendMessage(gid, base + body + tail));
+    const gm = await sendToGroup((gid) => bot.api.sendMessage(gid, base + body + tail, { parse_mode: "HTML" }));
     if (!gm) return; // группа не привязана — карточка некуда отправлять
     task.gmsg = gm.message_id;
     await redis.set(taskKey(num), task);
@@ -1152,20 +1155,21 @@ async function createTaskFromDraft(ctx, u, deferred) {
 
           /* подсказка бухгалтерам — ответом на карточку задачи */
           try {
+            const e2 = escapeHtml;
             const lines = [
-              `🤖 AI-бухгалтер по задаче №${num}:`,
-              `🗂 ${task.category || "категория не определена"}${task.sub ? " / " + task.sub : ""}`,
-              `⚡ Приоритет: ${ai.priority} · сложность: ${ai.complexity === "simple" ? "простая" : ai.complexity === "complex" ? "сложная" : "средняя"}`,
+              `🤖 <b>AI-бухгалтер</b> · задача №${num}`,
+              `🗂 ${e2(task.category || "категория не определена")}${task.sub ? " · " + e2(task.sub) : ""}`,
+              `⚡ <b>Приоритет:</b> ${ai.priority} · <b>сложность:</b> ${ai.complexity === "simple" ? "простая" : ai.complexity === "complex" ? "сложная" : "средняя"}`,
             ];
-            if (task.dueDate) lines.push(`📅 Срок: ${task.dueDate}`);
-            if (task.assignee) lines.push(`👤 Исполнитель: ${task.assignee} (наименее загружен) — взята в работу`);
-            if (ai.operation1c) lines.push(`🧾 Операция 1С: ${ai.operation1c}`);
-            if (!ai.relevant) lines.push("⚠️ Похоже, заявка не относится к бухгалтерии — уточните у клиента.");
-            if (ai.missing.length) lines.push(`❗ Не хватает: ${ai.missing.join(", ")}`);
-            if (draft) lines.push("📝 Черновик операции готов — проверьте в CRM (карточка задачи).");
-            if (ai.hint) lines.push(`💡 ${ai.hint}`);
+            if (task.dueDate) lines.push(`📅 <b>Срок:</b> ${task.dueDate}`);
+            if (task.assignee) lines.push(`👤 <b>Исполнитель:</b> ${e2(task.assignee)} (наименее загружен) — взята в работу`);
+            if (ai.operation1c) lines.push(`🧾 <b>Операция 1С:</b> ${e2(ai.operation1c)}`);
+            if (!ai.relevant) lines.push("⚠️ <i>Похоже, заявка не относится к бухгалтерии — уточните у клиента.</i>");
+            if (ai.missing.length) lines.push(`❗ <b>Не хватает:</b> ${e2(ai.missing.join(", "))}`);
+            if (draft) lines.push("📝 <b>Черновик операции готов</b> — проверьте в CRM.");
+            if (ai.hint) lines.push(`\n💡 ${e2(ai.hint)}`);
             const reply = task.gmsg ? { reply_to_message_id: task.gmsg } : {};
-            const hm = await sendToGroup((gid) => bot.api.sendMessage(gid, lines.join("\n"), reply));
+            const hm = await sendToGroup((gid) => bot.api.sendMessage(gid, lines.join("\n"), { ...reply, parse_mode: "HTML" }));
             if (hm) await redis.set(groupRouteKey(hm.message_id), num);
           } catch (e) { /* noop */ }
         }
@@ -1552,8 +1556,8 @@ bot.on("message", async (ctx) => {
         const opts = task.gmsg ? { reply_to_message_id: task.gmsg } : {};
         const label = await sendToGroup((gid) => bot.api.sendMessage(
           gid,
-          `💬 Клиент по задаче №${task.num} (${task.company}):`,
-          opts
+          `💬 <b>Клиент по задаче №${task.num}</b> (${escapeHtml(task.company || "")}):`,
+          { ...opts, parse_mode: "HTML" }
         ));
         if (label) await redis.set(groupRouteKey(label.message_id), task.num);
         const copied = await sendToGroup((gid) => bot.api.copyMessage(gid, ctx.chat.id, msg.message_id));
