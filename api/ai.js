@@ -11,6 +11,8 @@
 
 const { Redis } = require("@upstash/redis");
 const { chat, classifyTask, draftFromTask, summarizeThread } = require("../lib/ai.js");
+const { buildClientContext, getMemory, addMemory, getUsage, logUsage } = require("../lib/brain.js");
+const { CONSTITUTION } = require("../lib/knowledge.js");
 
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL,
@@ -34,7 +36,9 @@ async function logEvent(event, data) {
 
 const SELF = process.env.CRM_API_ORIGIN || "https://finpulse-crm.vercel.app";
 
-const AGENT_SYSTEM = `Ты — операционный AI-ассистент CRM Finpulse (бухгалтерская компания, Узбекистан, суммы в UZS).
+const AGENT_SYSTEM = CONSTITUTION + `
+
+Ты — операционный AI-ассистент CRM Finpulse (бухгалтерская компания, Узбекистан, суммы в UZS).
 Ты выполняешь поручения супер-админа через инструменты crm_get/crm_post/onec_get/onec_post.
 
 Справка по API (crm_get query / crm_post body):
@@ -64,6 +68,8 @@ const AGENT_TOOLS = [
   { type: "function", function: { name: "onec_get", description: "GET к /api/1c (интеграция 1С). query напр. \"r=ping\"", parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } } },
   { type: "function", function: { name: "onec_post", description: "POST к /api/1c, напр. {\"action\":\"sync_orgs\",\"app\":\"46516\"}", parameters: { type: "object", properties: { body: { type: "object" } }, required: ["body"] } } },
   { type: "function", function: { name: "ai_draft", description: "Сгенерировать AI-черновик операции для задачи CRM (сохраняется в task.aiDraft). Аргумент num — номер задачи.", parameters: { type: "object", properties: { num: { type: "number" } }, required: ["num"] } } },
+  { type: "function", function: { name: "memory_get", description: "Долгосрочная память по компании клиента (факты).", parameters: { type: "object", properties: { company: { type: "string" } }, required: ["company"] } } },
+  { type: "function", function: { name: "memory_add", description: "Записать устойчивый факт о компании в память (аренда, банк, договорённости).", parameters: { type: "object", properties: { company: { type: "string" }, fact: { type: "string" } }, required: ["company", "fact"] } } },
 ];
 
 async function callTool(name, args, authHeader) {
@@ -101,6 +107,7 @@ async function runAgent(messages, authHeader) {
     });
     if (!r.ok) throw new Error(`OpenAI HTTP ${r.status}: ${(await r.text()).slice(0, 200)}`);
     const data = await r.json();
+    void logUsage(redis, data.usage);
     const msg = data.choices?.[0]?.message;
     if (!msg) throw new Error("empty completion");
     convo.push(msg);
@@ -111,7 +118,12 @@ async function runAgent(messages, authHeader) {
       let args = {};
       try { args = JSON.parse(tc.function.arguments || "{}"); } catch (e) { /* noop */ }
       let result;
-      if (tc.function.name === "ai_draft") {
+      if (tc.function.name === "memory_get") {
+        result = JSON.stringify({ ok: true, memory: await getMemory(redis, String(args.company || "")) });
+      } else if (tc.function.name === "memory_add") {
+        const added = await addMemory(redis, String(args.company || ""), String(args.fact || ""), "AI-агент");
+        result = JSON.stringify({ ok: added });
+      } else if (tc.function.name === "ai_draft") {
         try {
           const task = await redis.get("task:" + Number(args.num));
           if (!task) { result = JSON.stringify({ ok: false, error: "task not found" }); }
@@ -121,7 +133,7 @@ async function runAgent(messages, authHeader) {
               const cid = await redis.get("clientcompany:" + String(task.company || "").toLowerCase().replace(/[^a-zа-яё0-9]+/gi, " ").trim());
               if (cid) clientInfo = await redis.get("client:" + cid);
             } catch (e) { /* noop */ }
-            const draft = await draftFromTask(task, clientInfo);
+            const draft = await draftFromTask(task, clientInfo, { redis });
             if (draft) {
               task.aiDraft = { ...draft, generatedAt: new Date().toISOString(), by: "AI-агент" };
               await redis.set("task:" + Number(args.num), task);
@@ -175,6 +187,9 @@ module.exports = async (req, res) => {
           }
         }
         return res.status(200).json({ ok: true, key: true, model });
+      }
+      if (q.r === "usage") {
+        return res.status(200).json({ ok: true, usage: await getUsage(redis, Number(q.days) || 7) });
       }
       if (q.r === "settings") {
         const cur = (await redis.get("ai:settings")) || {};

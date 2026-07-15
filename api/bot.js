@@ -1117,7 +1117,9 @@ async function createTaskFromDraft(ctx, u, deferred) {
       const aiSet = (await redis.get("ai:settings")) || {};
       if (aiSet.classify !== false) {
         const { intakeTask, draftFromTask } = require("../lib/ai.js");
+        const { buildClientContext, addMemory } = require("../lib/brain.js");
         const cats = await getCategories();
+        const clientContext = await buildClientContext(redis, task.company);
 
         /* загрузка сотрудников для рекомендации исполнителя */
         let employees = [];
@@ -1146,6 +1148,8 @@ async function createTaskFromDraft(ctx, u, deferred) {
           categories: cats,
           employees,
           today: new Date(Date.now() + 5 * 3600e3).toISOString().slice(0, 10),
+          context: clientContext,
+          redis,
         });
 
         if (ai) {
@@ -1157,6 +1161,7 @@ async function createTaskFromDraft(ctx, u, deferred) {
             task.status = "in_progress";
           }
           task.aiIntake = { ...ai, at: new Date().toISOString() };
+          if (ai.remember) { try { await addMemory(redis, task.company, ai.remember, "AI-intake"); } catch (e) { /* noop */ } }
 
           /* простая типовая задача → сразу готовим черновик операции */
           let draft = null;
@@ -1165,7 +1170,7 @@ async function createTaskFromDraft(ctx, u, deferred) {
               let clientInfo = null;
               const cid = await redis.get("clientcompany:" + normCompany(task.company || ""));
               if (cid) clientInfo = await redis.get("client:" + cid);
-              draft = await draftFromTask(task, clientInfo);
+              draft = await draftFromTask(task, clientInfo, { redis });
               if (draft) task.aiDraft = { ...draft, generatedAt: new Date().toISOString(), by: "AI-бухгалтер" };
             } catch (e) { /* noop */ }
           }
