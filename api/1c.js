@@ -84,7 +84,7 @@ async function pingAll() {
       return {
         ...a,
         reachable: r.status === 200,
-        авторизация: r.status !== 401,
+        status: r.status,
         entities,
         ready: r.status === 200 && (entities ?? 0) > 0,
       };
