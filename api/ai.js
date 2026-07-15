@@ -12,7 +12,7 @@
 const { Redis } = require("@upstash/redis");
 const { chat, classifyTask, draftFromTask, summarizeThread } = require("../lib/ai.js");
 const { buildClientContext, getMemory, addMemory, getUsage, logUsage } = require("../lib/brain.js");
-const { CONSTITUTION } = require("../lib/knowledge.js");
+const { CONSTITUTION, DEFAULT_CATEGORIES } = require("../lib/knowledge.js");
 
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL,
@@ -224,8 +224,9 @@ module.exports = async (req, res) => {
       if (!hasKey) return res.status(200).json({ ok: false, error: "OPENAI_API_KEY не задан" });
 
       if (body && body.action === "classify" && body.text) {
-        const cats = (await redis.get("bot:categories")) || [];
-        const r = await classifyTask(String(body.text), cats.length ? cats : [{ name: "Другое", subs: [] }]);
+        const saved = (await redis.get("bot:categories")) || [];
+        const cats = Array.isArray(saved) && saved.length ? saved : DEFAULT_CATEGORIES;
+        const r = await classifyTask(String(body.text), cats, { redis });
         return res.status(200).json({ ok: true, result: r });
       }
 
