@@ -151,6 +151,35 @@ async function runAgent(messages, authHeader) {
   return { reply: "Достигнут лимит шагов — уточните задачу или разбейте её на части.", steps };
 }
 
+
+/* ---------------- Темы AI-чата (история диалогов суперадмина) ---------------- */
+async function listChats() {
+  const rows = (await redis.lrange("aichat:threads", 0, 29)) || [];
+  return rows.map((r) => { try { return typeof r === "string" ? JSON.parse(r) : r; } catch { return null; } }).filter(Boolean);
+}
+async function saveChatMeta(meta) {
+  const all = await listChats();
+  const rest = all.filter((c) => c.id !== meta.id);
+  await redis.del("aichat:threads");
+  const next = [meta, ...rest].slice(0, 30);
+  if (next.length) await redis.rpush("aichat:threads", ...next.map((c) => JSON.stringify(c)));
+  /* обрезаем хвост: удаляем сообщения тем, выпавших из списка */
+  for (const gone of all.slice(29)) { try { await redis.del("aichat:msgs:" + gone.id); } catch (e) { /* noop */ } }
+}
+async function persistChat(chatId, messages, reply, steps) {
+  const id = chatId || "ch" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+  const stored = [...messages, { role: "assistant", content: reply, steps: steps || [] }].slice(-60);
+  await redis.set("aichat:msgs:" + id, stored);
+  const firstUser = stored.find((m) => m.role === "user");
+  await saveChatMeta({
+    id,
+    title: String(firstUser?.content || "Диалог").slice(0, 60),
+    updatedAt: new Date().toISOString(),
+    count: stored.length,
+  });
+  return id;
+}
+
 module.exports = async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
@@ -188,6 +217,13 @@ module.exports = async (req, res) => {
         }
         return res.status(200).json({ ok: true, key: true, model });
       }
+      if (q.r === "chats") {
+        return res.status(200).json({ ok: true, chats: await listChats() });
+      }
+      if (q.r === "chat" && q.id) {
+        const msgs = (await redis.get("aichat:msgs:" + q.id)) || [];
+        return res.status(200).json({ ok: true, messages: msgs });
+      }
       if (q.r === "usage") {
         return res.status(200).json({ ok: true, usage: await getUsage(redis, Number(q.days) || 7) });
       }
@@ -207,8 +243,20 @@ module.exports = async (req, res) => {
         const isAdmin = !JWT_SECRET || (authUser && authUser.role === "admin");
         if (!isAdmin) return res.status(403).json({ ok: false, error: "только супер-админ" });
         const out = await runAgent(body.messages, req.headers.authorization || "");
+        let chatId = body.chatId || null;
+        try { chatId = await persistChat(body.chatId, body.messages, out.reply, out.steps); } catch (e) { /* noop */ }
         await logEvent("ai_agent_run", { steps: out.steps.length, by: actor });
-        return res.status(200).json({ ok: true, ...out });
+        return res.status(200).json({ ok: true, chatId, ...out });
+      }
+      if (body && body.action === "chat_delete" && body.id) {
+        const isAdmin = !JWT_SECRET || (authUser && authUser.role === "admin");
+        if (!isAdmin) return res.status(403).json({ ok: false, error: "только супер-админ" });
+        const all = await listChats();
+        await redis.del("aichat:threads");
+        const rest = all.filter((c) => c.id !== body.id);
+        if (rest.length) await redis.rpush("aichat:threads", ...rest.map((c) => JSON.stringify(c)));
+        await redis.del("aichat:msgs:" + body.id);
+        return res.status(200).json({ ok: true });
       }
       if (body && body.action === "settings_save" && body.settings) {
         const clean = {
