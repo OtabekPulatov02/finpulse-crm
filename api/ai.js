@@ -142,7 +142,7 @@ async function runAgent(messages, authHeaders) {
           }
         } catch (e) { result = JSON.stringify({ ok: false, error: String(e).slice(0, 200) }); }
       } else {
-        result = await callTool(tc.function.name, args, authHeader);
+        result = await callTool(tc.function.name, args, authHeaders);
       }
       steps.push({ tool: tc.function.name, args: JSON.stringify(args).slice(0, 200), ok: !result.includes('"ok":false') });
       convo.push({ role: "tool", tool_call_id: tc.id, content: result });
