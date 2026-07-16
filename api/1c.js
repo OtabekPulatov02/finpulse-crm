@@ -323,7 +323,7 @@ module.exports = async (req, res) => {
         const r = await fetch(url, { headers: { Authorization: authHeader() }, signal: AbortSignal.timeout(20000) });
         const text = await r.text();
         if (r.status !== 200) return res.status(200).json({ ok: false, status: r.status, error: text.slice(0, 300) });
-        const re = new RegExp(`<EntityType Name="${String(q.entity)}"[\s\S]*?</EntityType>`);
+        const re = new RegExp(`<EntityType Name="${String(q.entity)}"[\\s\\S]*?</EntityType>`);
         const m = re.exec(text);
         if (!m) return res.status(200).json({ ok: false, error: "entity not found" });
         const props = [...m[0].matchAll(/<Property Name="([^"]+)"/g)].map((x) => x[1]);
