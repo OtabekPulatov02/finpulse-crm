@@ -503,12 +503,21 @@ async function syncRegulatedReports(appPath, appName, actor) {
     const prev = byName.get(r.name);
     if (!prev || new Date(r.periodEnd) > new Date(prev.periodEnd)) byName.set(r.name, r);
   }
+  const now = new Date();
   const calendar = [...byName.values()].map((r) => {
-    const nextPeriodEnd = addPeriod(r.periodEnd, r.periodicity);
+    /* проецируем вперёд не на один шаг от последней записи, а до ближайшего
+       периода ОТНОСИТЕЛЬНО СЕГОДНЯ — иначе для давно не обновлявшихся баз
+       "следующий период" тоже окажется в прошлом и будет бесполезен.
+       skipped считает, сколько периодов пропущено — сигнал о том, что в 1С
+       давно не готовили этот отчёт (стоит проверить, не отстал ли синк). */
+    let next = new Date(r.periodEnd);
+    let skipped = 0;
+    while (next <= now) { next = addPeriod(next, r.periodicity); skipped++; }
     return {
       name: r.name, periodicity: r.periodicity, lastPeriodLabel: r.periodLabel,
       lastPeriodEnd: r.periodEnd, lastPreparedAt: r.preparedAt,
-      nextExpectedPeriodEnd: nextPeriodEnd.toISOString().slice(0, 10),
+      nextExpectedPeriodEnd: next.toISOString().slice(0, 10),
+      periodsSkipped: Math.max(0, skipped - 1),
     };
   }).sort((a, b) => new Date(a.nextExpectedPeriodEnd) - new Date(b.nextExpectedPeriodEnd));
   await redis.set("1c:reports:" + appPath, calendar);
@@ -887,7 +896,7 @@ module.exports = async (req, res) => {
           for (const c of cal) items.push({ ...c, appCode: a.code, appName: a.name });
         }
         items.sort((x, y) => new Date(x.nextExpectedPeriodEnd) - new Date(y.nextExpectedPeriodEnd));
-        return res.status(200).json({ ok: true, items, note: "nextExpectedPeriodEnd — вывод из истории и периодичности отчёта в 1С, НЕ официальный срок сдачи (1С его не хранит отдельным полем); используйте как ориентир, сверяйте с реальным сроком." });
+        return res.status(200).json({ ok: true, items, note: "nextExpectedPeriodEnd — вывод из истории и периодичности отчёта в 1С (ближайший период после сегодняшней даты), НЕ официальный срок сдачи (1С его не хранит отдельным полем); используйте как ориентир, сверяйте с реальным сроком. periodsSkipped>0 значит в 1С давно не готовили этот отчёт — стоит проверить, не отстаёт ли синк или сама подготовка отчёта в 1С." });
       }
       return res.status(200).json({ ok: true, service: "Finpulse 1C bridge", routes: ["apps", "ping", "meta", "orgs", "counterparties", "nomenclature", "contracts", "turnover", "doclog", "reports"] });
     }
