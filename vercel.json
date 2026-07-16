@@ -3,10 +3,17 @@
     {
       "path": "/api/cron/reminders",
       "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/api/cron/1c-sync",
+      "schedule": "0 2 * * *"
     }
   ],
   "functions": {
     "api/ai.js": {
+      "maxDuration": 60
+    },
+    "api/cron/1c-sync.js": {
       "maxDuration": 60
     }
   }
