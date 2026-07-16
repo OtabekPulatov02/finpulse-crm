@@ -192,14 +192,22 @@ async function syncOrgs(appPath, appName, actor) {
    проводит. Точные имена реквизитов сверяются с $metadata после включения
    состава OData провайдером. */
 
+/* ВНИМАНИЕ: имена сверены с реальным $metadata базы (16.07.2026).
+   payment_out/payment_in и act_sverki раньше указывали на НЕСУЩЕСТВУЮЩИЕ
+   сущности (Document_ПлатежноеПоручениеИсходящее/Входящее, Document_АктСверкиВзаиморасчетов) —
+   в этой конфигурации нет отдельных документов на приход/расход платежа и нет акта
+   сверки как отдельного документа. Реальные аналоги:
+   - платёж (оба направления) — единый Document_ПлатежноеПоручение с полем ВидОперации;
+   - акт сверки — ближайший аналог Document_ДокументРасчетовСКонтрагентом (документ расчётов
+     с контрагентом: Организация/Контрагент/Договор/Сумма/Комментарий — то, что нужно для черновика). */
 const DOC_1C_TYPES = {
-  payment_out: "Document_ПлатежноеПоручениеИсходящее",
-  payment_in: "Document_ПлатежноеПоручениеВходящее",
+  payment_out: "Document_ПлатежноеПоручение",
+  payment_in: "Document_ПлатежноеПоручение",
   invoice_esf: "Document_СчетФактураВыданный",
   schet: "Document_СчетНаОплатуПокупателю",
   postuplenie: "Document_ПоступлениеТоваровУслуг",
   realizatsiya: "Document_РеализацияТоваровУслуг",
-  act_sverki: "Document_АктСверкиВзаиморасчетов",
+  act_sverki: "Document_ДокументРасчетовСКонтрагентом",
   doverennost: "Document_Доверенность",
   /* HR (проверено по $metadata реальной базы 13.07.2026) */
   hr_hire: "Document_ПриемНаРаботу",
@@ -207,10 +215,58 @@ const DOC_1C_TYPES = {
   hr_leave: "Document_Отпуск",
 };
 
+/* типы документов, где реквизит контрагента — простая ссылка Контрагент_Key
+   (не полиморфное поле, как в Document_ПлатежноеПоручение) — для них можно
+   безопасно подставить Ref_Key контрагента из синка. */
+const COUNTERPARTY_KEY_ENTITIES = new Set([
+  "Document_СчетФактураВыданный",
+  "Document_СчетНаОплатуПокупателю",
+  "Document_ПоступлениеТоваровУслуг",
+  "Document_РеализацияТоваровУслуг",
+  "Document_ДокументРасчетовСКонтрагентом",
+  "Document_Доверенность",
+]);
+
 async function orgFor(company) {
   const norm = normCompany(company || "");
   if (!norm) return null;
   return await redis.get("1c:orgmap:" + norm);
+}
+
+/* ---- контрагенты приложения (для подстановки Контрагент_Key в черновики) ---- */
+async function getCounterparties(appPath) {
+  const r = await odata(appPath, "Catalog_Контрагенты",
+    "$format=json&$select=Ref_Key,Description,НаименованиеПолное,ИНН,ПИНФЛ&$filter=DeletionMark eq false");
+  if (r.status === 401) return { ok: false, error: "auth: проверьте ODATA_1C_LOGIN/PASSWORD" };
+  if (r.status === 404) return { ok: false, error: "Catalog_Контрагенты не включён в состав OData — настройте состав REST-сервиса" };
+  if (r.status !== 200 || !r.json) return { ok: false, error: `HTTP ${r.status}` };
+  return {
+    ok: true,
+    counterparties: (r.json.value || []).map((c) => ({
+      ref: c.Ref_Key, name: c.Description, fullName: c["НаименованиеПолное"] || null,
+      inn: c["ИНН"] || null, pinfl: c["ПИНФЛ"] || null,
+    })),
+  };
+}
+
+async function syncCounterparties(appPath, appName, actor) {
+  const res = await getCounterparties(appPath);
+  if (!res.ok) return res;
+  let count = 0;
+  for (const cp of res.counterparties) {
+    const norm = normCompany(cp.name);
+    if (!norm) continue;
+    await redis.set("1c:cpmap:" + appPath + ":" + norm, { ref: cp.ref, name: cp.name, inn: cp.inn });
+    count++;
+  }
+  await logEvent("1c_sync_counterparties", { app: appName, count, by: actor || "CRM" });
+  return { ok: true, total: res.counterparties.length, mapped: count };
+}
+
+async function counterpartyRefFor(appPath, name) {
+  const norm = normCompany(name || "");
+  if (!norm) return null;
+  return await redis.get("1c:cpmap:" + appPath + ":" + norm);
 }
 
 /* Универсальное создание документа (черновик, Posted=false) */
@@ -259,6 +315,16 @@ async function executeTaskIn1C(num, actor) {
     "Организация_Key": org.ref,
     "Комментарий": comment.slice(0, 1000),
   };
+
+  /* если для этого типа документа реквизит контрагента — простая ссылка,
+     подставляем реальный Ref_Key из синка контрагентов (не только текст в комментарии) */
+  if (COUNTERPARTY_KEY_ENTITIES.has(entity) && draft.counterparty) {
+    try {
+      const cp = await counterpartyRefFor(org.app, draft.counterparty);
+      if (cp) fields["Контрагент_Key"] = cp.ref;
+    } catch (e) { /* контрагент не критичен — документ всё равно создастся с текстом в комментарии */ }
+  }
+
   const r = await createDraftDoc(org.app, entity, fields);
   if (!r.ok) return r;
 
@@ -369,6 +435,11 @@ module.exports = async (req, res) => {
         const a = findApp(body.app);
         if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
         return res.status(200).json(await syncOrgs(a.path, a.name, authUser?.name));
+      }
+      if (body && body.action === "sync_counterparties" && body.app) {
+        const a = findApp(body.app);
+        if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
+        return res.status(200).json(await syncCounterparties(a.path, a.name, authUser?.name));
       }
       return res.status(200).json({ ok: false, error: "unknown action" });
     }

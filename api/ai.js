@@ -52,8 +52,8 @@ POST actions:
 - {action:"access_request_resolve", id, approve:true|false}
 - {action:"employee_create", name, phone, role:"admin|accountant"} / {action:"employee_update", id, patch} / {action:"employee_reset_password", id} / {action:"employee_delete", id}
 - {action:"calendar_event_create", type:"tax|pay", title, company?, date, repeat?, remindDays?} / _update / _delete
-onec_get: r=apps | r=ping | r=meta&app=<code> | r=orgs&app=<code>
-onec_post: {action:"sync_orgs", app} | {action:"execute_task", num} — создаёт НЕПРОВЕДЁННЫЙ документ в 1С базе клиента из AI-черновика задачи (главная операция!)
+onec_get: r=apps | r=ping | r=meta&app=<code> | r=orgs&app=<code> | r=counterparties&app=<code>
+onec_post: {action:"sync_orgs", app} | {action:"sync_counterparties", app} | {action:"execute_task", num} — создаёт НЕПРОВЕДЁННЫЙ документ в 1С базе клиента из AI-черновика задачи (главная операция!). Если у черновика указан контрагент, а по нему выполнен синк контрагентов — документ создаётся со ссылкой на реального контрагента, а не только текстом в комментарии.
 Пайплайн выполнения задачи клиента в 1С: 1) crm_get r=tasks — найди задачу; 2) ai_draft {num} — подготовь черновик операции; 3) onec_post {action:"execute_task", num} — создай непроведённый документ в 1С базе клиента; 4) crm_post {action:"status", num, status:"in_progress", assignee:"AI-бухгалтер"} и сообщи, что бухгалтеру осталось проверить и провести.
 ВАЖНО про 1С: НИКОГДА не вызывай onec_post {action:"create_draft", ...} напрямую и никогда не придумывай/не угадывай имена сущностей 1С (entity) сам — единственный поддерживаемый способ создать документ в 1С это пайплайн execute_task выше, который сам подставляет проверенное имя документа по типу черновика.
 Поддерживаемые типы черновиков документов 1С (создание НЕПРОВЕДЁННОГО документа в базе клиента): платёж исходящий/входящий, ЭСФ (счёт-фактура выданный), счёт на оплату, поступление товаров/услуг, реализация товаров/услуг, акт сверки, доверенность, приём на работу, увольнение, отпуск. Все эти типы ПОДДЕРЖИВАЮТСЯ через execute_task.
