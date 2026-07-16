@@ -769,6 +769,19 @@ module.exports = async (req, res) => {
 
     if (req.method === "GET") {
       if (q.r === "apps") return res.status(200).json({ ok: true, apps });
+      if (q.r === "entitynames3" && q.app) {
+        const a = findApp(q.app);
+        if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
+        const r = await fetch(`${BASE}${a.path}/odata/standard.odata/$metadata`, {
+          headers: { Authorization: authHeader() },
+          signal: AbortSignal.timeout(20000),
+        });
+        const xml = await r.text();
+        const names = [...xml.matchAll(/EntityType Name="([^"]+)"/g)].map((m) => m[1]);
+        const kw = /отчет|деклар|регламент|срок|календар|событ|уведомлен|период|напомин|задач|дедлайн/i;
+        const hits = names.filter((n) => kw.test(n));
+        return res.status(200).json({ ok: true, total: names.length, hits });
+      }
       if (q.r === "ping") return res.status(200).json({ ok: true, apps: await pingAll() });
       if (q.r === "meta" && q.app) {
         const a = findApp(q.app);
