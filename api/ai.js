@@ -85,10 +85,13 @@ async function callTool(name, args, authHeaders) {
     if (name.endsWith("_get")) {
       r = await fetch(base + "?" + String(args.query || ""), { headers: authHeaders, signal: AbortSignal.timeout(20000) });
     } else {
+      /* модель иногда присылает поля действия на верхнем уровне (без обёртки body) —
+         подстрахуемся и в этом случае используем сами args как тело запроса. */
+      const payload = (args.body && typeof args.body === "object") ? args.body : args;
       r = await fetch(base, {
         method: "POST",
         headers: { "content-type": "application/json", ...authHeaders },
-        body: JSON.stringify(args.body || {}),
+        body: JSON.stringify(payload || {}),
         signal: AbortSignal.timeout(25000),
       });
     }
