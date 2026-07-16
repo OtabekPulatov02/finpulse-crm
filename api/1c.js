@@ -1029,6 +1029,12 @@ module.exports = async (req, res) => {
         while ((m = re.exec(chunk))) props.push({ name: m[1], type: m[2] });
         return res.status(200).json({ ok: true, entity: q.entity, propsCount: props.length, props });
       }
+      if (q.r === "metaraw" && q.app) {
+        const a = findApp(q.app);
+        if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
+        const r = await odata(a.path, "$metadata", "");
+        return res.status(200).json({ ok: true, status: r.status, len: (r.text || "").length, head: (r.text || "").slice(0, 400) });
+      }
       if (q.r === "entitynames4" && q.app && q.kw) {
         const a = findApp(q.app);
         if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
