@@ -42,7 +42,7 @@ const redis = new Redis({
    зеркалит такой же вызов в api/crm.js. Сам /api/ai проверяет тублер
    ai:settings.autoWork и молча выходит, если он выключен. */
 const AUTOWORK_API_ORIGIN = process.env.CRM_API_ORIGIN || "https://finpulse-crm.vercel.app";
-async function triggerAutoWork(num) {
+async function triggerAutoWork(num, extraContext) {
   const JWT_SECRET = process.env.JWT_SECRET || process.env.CRM_JWT_SECRET || "";
   if (!JWT_SECRET) return;
   try {
@@ -51,7 +51,7 @@ async function triggerAutoWork(num) {
     await fetch(`${AUTOWORK_API_ORIGIN}/api/ai`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-      body: JSON.stringify({ action: "auto_work", num }),
+      body: JSON.stringify({ action: "auto_work", num, ...(extraContext ? { extraContext } : {}) }),
       signal: AbortSignal.timeout(55000),
     });
   } catch (e) { console.error("triggerAutoWork:", num, String(e).slice(0, 200)); }
@@ -1424,6 +1424,22 @@ bot.on("message", async (ctx) => {
     const group = await redis.get("group");
     if (!group || ctx.chat.id !== Number(group)) return;
     if (!msg.reply_to_message) return;
+
+    /* --- Ответ бухгалтера на уточняющий вопрос ИИ-бухгалтера (reply на
+       сообщение вида "🤖 Задача №N — нужна ваша помощь") --- НЕ пересылаем
+       клиенту, а скармливаем текст обратно в автономный конвейер ИИ,
+       чтобы он продолжил задачу с учётом уточнения. */
+    const aiq = await redis.get("aiq:" + msg.reply_to_message.message_id);
+    if (aiq && aiq.num) {
+      const replyText = (msg.text || msg.caption || "").trim();
+      if (!replyText) {
+        return ctx.reply("Пожалуйста, ответьте текстом на вопрос ИИ-бухгалтера.", { reply_to_message_id: msg.message_id }).catch(() => {});
+      }
+      try { await redis.del("aiq:" + msg.reply_to_message.message_id); } catch (e) {}
+      await triggerAutoWork(Number(aiq.num), replyText);
+      return;
+    }
+
     const num = await redis.get(groupRouteKey(msg.reply_to_message.message_id));
     if (!num) return;
     const task = await redis.get(taskKey(Number(num)));
