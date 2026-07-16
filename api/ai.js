@@ -54,8 +54,8 @@ POST actions:
 - {action:"calendar_event_create", type:"tax|pay", title, company?, date, repeat?, remindDays?} / _update / _delete
 onec_get: r=apps | r=ping | r=meta&app=<code> | r=orgs&app=<code> | r=counterparties&app=<code> | r=nomenclature&app=<code> | r=contracts&app=<code> | r=turnover&app=<code>&account=<код счёта, напр. 5110>&from=YYYY-MM-DD&to=YYYY-MM-DD — обороты по счёту за период (дебет/кредит/нетто); БЕЗ разбивки по контрагентам (субконто по контрагентам не публикуется через OData в этой конфигурации 1С)
 ВАЖНО: <code> — это числовой код приложения 1С (напр. "46516"), а НЕ название компании. Если знаешь только название компании/клиента — сначала вызови onec_get r=apps, найди в списке нужную запись (по полю name) и возьми её code, только потом используй этот code в app=.
-onec_post: {action:"sync_orgs", app} | {action:"sync_counterparties", app} | {action:"sync_nomenclature", app} | {action:"sync_contracts", app} | {action:"execute_task", num, force?:true} — создаёт НЕПРОВЕДЁННЫЙ документ в 1С базе клиента из AI-черновика задачи (главная операция!). execute_task теперь сам заполняет реальные поля документа, а не только комментарий: сумму/НДС (из draft.amount и draft.vat, с правильным полем под каждый тип документа), Контрагент_Key и ДоговорКонтрагента_Key (если контрагент синкан), строки товаров/услуг (если заполнен draft.items и синкана номенклатура). Если контрагента вообще нет в 1С (ни точного, ни похожего совпадения) — execute_task сам создаёт минимальную черновую карточку контрагента и возвращает note об этом; обязательно передай этот note пользователю, чтобы бухгалтер проверил новую карточку.
-Пайплайн выполнения задачи клиента в 1С: 1) crm_get r=tasks — найди задачу; 2) ai_draft {num} — подготовь черновик операции; 3) onec_post {action:"execute_task", num} — создай непроведённый документ в 1С базе клиента; 4) crm_post {action:"status", num, status:"in_progress", assignee:"AI-бухгалтер"} и сообщи, что бухгалтеру осталось проверить и провести. Если execute_task вернул duplicate:true — значит по этой же компании/типу/сумме уже создан документ за последние 24ч (номер задачи указан в ответе); НЕ вызывай сразу повторно с force — сначала вызови ask_user, спроси у пользователя, это действительно отдельная операция или повтор, и только после явного подтверждения вызови execute_task снова с force:true. Если execute_task вернул counterpartyAmbiguous:true — контрагент из заявки не найден точно в синке 1С, но есть похожие варианты (suggestions); вызови ask_user с этими вариантами как options, и после ответа пользователя либо исправь черновик (ai_draft заново с уточнённым именем), либо вызови execute_task с force:true, если пользователь согласен создать документ без привязки контрагента.
+onec_post: {action:"sync_orgs", app} | {action:"sync_counterparties", app} | {action:"sync_nomenclature", app} | {action:"sync_contracts", app} | {action:"execute_task", num, force?:true, counterpartyRef?:string, confirmNewCounterparty?:true} — создаёт НЕПРОВЕДЁННЫЙ документ в 1С базе клиента из AI-черновика задачи (главная операция!). execute_task сам заполняет реальные поля документа: сумму/НДС (из draft.amount и draft.vat), Контрагент_Key и ДоговорКонтрагента_Key (если контрагент синкан), строки товаров/услуг (если заполнен draft.items). Контрагент проверяется по ИНН (надёжнее) и только потом по названию — ИНН из заявки передавай в черновик как counterpartyInn, если он есть. Контрагента НИКОГДА не создавай молча по одному лишь несовпадению имени: если execute_task вернул counterpartyAmbiguous:true — либо есть suggestions (похожие варианты, каждый с ref) — спроси пользователя через ask_user, какой из них подходит, и при выборе вызови execute_task повторно с counterpartyRef:<ref выбранного варианта>; либо suggestions пустой и noMatch:true — спроси у пользователя явно, точно ли это новый контрагент, и только при явном "да" вызови execute_task с confirmNewCounterparty:true (это единственный способ создать новую карточку контрагента — никогда не делай это по умолчанию).
+Пайплайн выполнения задачи клиента в 1С: 1) crm_get r=tasks — найди задачу; 2) ai_draft {num} — подготовь черновик операции; 3) onec_post {action:"execute_task", num} — создай непроведённый документ в 1С базе клиента; 4) crm_post {action:"status", num, status:"in_progress", assignee:"AI-бухгалтер"} и сообщи, что бухгалтеру осталось проверить и провести. Если execute_task вернул duplicate:true — значит по этой же компании/типу/сумме уже создан документ за последние 24ч (номер задачи указан в ответе); НЕ вызывай сразу повторно с force — сначала вызови ask_user, спроси у пользователя, это действительно отдельная операция или повтор, и только после явного подтверждения вызови execute_task снова с force:true.
 ВАЖНО про 1С: НИКОГДА не вызывай onec_post {action:"create_draft", ...} напрямую и никогда не придумывай/не угадывай имена сущностей 1С (entity) сам — единственный поддерживаемый способ создать документ в 1С это пайплайн execute_task выше, который сам подставляет проверенное имя документа по типу черновика.
 Поддерживаемые типы черновиков документов 1С (создание НЕПРОВЕДЁННОГО документа в базе клиента): платёж исходящий/входящий, ЭСФ (счёт-фактура выданный), счёт на оплату, поступление товаров/услуг, реализация товаров/услуг, акт сверки, доверенность, приём на работу, увольнение, отпуск. Все эти типы ПОДДЕРЖИВАЮТСЯ через execute_task.
 НЕ путай это с самим ЭДО (Didox) — фактическая отправка документа контрагенту через систему электронного документооборота и получение подписи НЕ реализована (нет интеграции с Didox API), это отдельная задача. Если просят создать документ одного из поддерживаемых типов (в т.ч. ЭСФ) — выполняй через execute_task как обычно. Если явно просят отправить/подписать через ЭДО/Didox — скажи, что этой интеграции пока нет, и не пытайся выполнить это через 1С.
@@ -300,7 +300,26 @@ async function pushThreadEntry(num, text) {
   } catch (e) { /* лента не критична */ }
 }
 
-async function askClarificationInGroup(num, task, questionText) {
+/* Лёгкая нечёткая оценка похожести названий контрагентов — та же эвристика,
+   что и в api/1c.js (подстрока + пересечение слов), нужна здесь, чтобы понять,
+   на какой из предложенных вариантов бухгалтер ответил в группе. */
+function fuzzyScoreLocal(a, b) {
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+  if (a.includes(b) || b.includes(a)) return 0.85;
+  const wa = new Set(a.split(" ").filter((w) => w.length > 2));
+  const wb = new Set(b.split(" ").filter((w) => w.length > 2));
+  if (!wa.size || !wb.size) return 0;
+  let common = 0;
+  for (const w of wa) if (wb.has(w)) common++;
+  return common / Math.max(wa.size, wb.size);
+}
+
+const NEW_COUNTERPARTY_RE = /нов(ый|ая|ого)\s*(контрагент|клиент|компани)|созда(й|ть|ем|йте)|нет в списке|нет такого|not in (the )?list|new (client|company|counterparty)/i;
+const CONFIRM_YES_RE = /^(да|ага|верно|так|точно|yes|confirm|подтвержда)/i;
+const INN_ONLY_RE = /^\d{9}$|^\d{14}$/;
+
+async function askClarificationInGroup(num, task, questionText, kind, suggestions) {
   const msg = await tgGroupSend({
     text: `🤖 <b>Задача №${num}</b> — нужна ваша помощь
 
@@ -311,16 +330,58 @@ ${escapeHtmlLocal(questionText)}
     ...(task.gmsg ? { reply_to_message_id: task.gmsg } : {}),
   });
   if (msg) {
-    try { await redis.set("aiq:" + msg.message_id, { num }, { ex: 3 * 24 * 3600 }); } catch (e) { /* noop */ }
+    try {
+      await redis.set("aiq:" + msg.message_id, { num, kind: kind || "generic", suggestions: suggestions || [] }, { ex: 3 * 24 * 3600 });
+    } catch (e) { /* noop */ }
   }
   await pushThreadEntry(num, `🤖 Уточняю в группе бухгалтеров: ${questionText}`);
-  await logEvent("ai_autowork_asked", { num });
+  await logEvent("ai_autowork_asked", { num, kind: kind || "generic" });
   return { ok: true, asked: true, question: questionText };
 }
 
+async function reportExecSuccess(num, task, draft, execRes) {
+  const entityName = ENTITY_RU_NAMES[execRes.entity] || execRes.entity;
+  const summary =
+    `✅ Задача №${num} — документ подготовлен в 1С
+
+` +
+    `📄 ${entityName}${execRes.number ? " №" + execRes.number : ""}
+` +
+    (draft.amount ? `💰 Сумма: ${Number(draft.amount).toLocaleString("ru-RU")} UZS
+` : "") +
+    (draft.counterparty ? `🤝 Контрагент: ${draft.counterparty}
+` : "") +
+    (execRes.note ? `⚠️ ${execRes.note}
+` : "") +
+    `
+👉 Осталось бухгалтеру: проверить документ в 1С и провести/отправить.`;
+  await tgGroupSend({
+    text: escapeHtmlLocal(summary),
+    ...(task.gmsg ? { reply_to_message_id: task.gmsg } : {}),
+  });
+  await pushThreadEntry(num, summary);
+  await logEvent("ai_autowork_done", { num, entity: execRes.entity, ref: execRes.ref });
+  return { ok: true, executed: true, entity: execRes.entity, ref: execRes.ref, number: execRes.number };
+}
+
+async function reportExecBlocked(num, task, errorText) {
+  const blockedText = `⚠️ Задача №${num} — не смог выполнить автоматически: ${errorText || "неизвестная ошибка"}.
+
+👉 Нужна ручная обработка бухгалтером.`;
+  await tgGroupSend({
+    text: escapeHtmlLocal(blockedText),
+    ...(task.gmsg ? { reply_to_message_id: task.gmsg } : {}),
+  });
+  await pushThreadEntry(num, blockedText);
+  await logEvent("ai_autowork_blocked", { num, error: errorText });
+  return { ok: false, blocked: true, error: errorText };
+}
+
 /* Главная функция автономного режима. extraContext — если это повторный
-   вызов после ответа бухгалтера на уточняющий вопрос (см. bot.js). */
-async function runAutoWork(num, extraContext) {
+   вызов после ответа бухгалтера на уточняющий вопрос (см. bot.js).
+   aiqInfo — { kind: "counterparty"|"confirm_new"|"generic", suggestions } из
+   исходного вопроса, на который сейчас пришёл ответ (см. aiq:<msgId> в bot.js). */
+async function runAutoWork(num, extraContext, aiqInfo) {
   const settings = { ...DEFAULT_SETTINGS, ...((await redis.get("ai:settings")) || {}) };
   if (!settings.autoWork) return { ok: true, skipped: "autoWork disabled" };
   if (!process.env.OPENAI_API_KEY) return { ok: true, skipped: "no OPENAI_API_KEY" };
@@ -328,6 +389,84 @@ async function runAutoWork(num, extraContext) {
   const task = await redis.get("task:" + num);
   if (!task) return { ok: false, error: "task not found" };
   if (task.status === "done" || task.status === "cancelled") return { ok: true, skipped: "task closed" };
+
+  /* Ответ на уточнение именно по контрагенту — не пере-спрашиваем ИИ весь черновик
+     заново вслепую, а сначала пытаемся умно интерпретировать сам ответ:
+     1) совпадает с одним из предложенных вариантов → используем его Ref_Key напрямую;
+     2) явное "новый контрагент"/"да" (если вопрос был confirm_new) → создаём карточку;
+     3) иначе — это уточнённое название/ИНН, пробуем резолвить его ещё раз по-настоящему
+        (через ИНН/точное имя в 1С), не создавая ничего вслепую; ограничиваем число
+        повторных уточнений, чтобы не зациклиться на одном и том же вопросе. */
+  if (extraContext && aiqInfo && (aiqInfo.kind === "counterparty" || aiqInfo.kind === "confirm_new") && task.aiDraft) {
+    const draft = task.aiDraft;
+    const trimmed = String(extraContext).trim();
+    const normReply = normCompanyLocal(trimmed);
+
+    let matched = null;
+    for (const s of (aiqInfo.suggestions || [])) {
+      const score = fuzzyScoreLocal(normReply, normCompanyLocal(s.name || ""));
+      if (score >= 0.5 && (!matched || score > matched.score)) matched = { ...s, score };
+    }
+
+    if (matched) {
+      const execRes = await internal1cPost({ action: "execute_task", num, counterpartyRef: matched.ref });
+      if (execRes.ok) return await reportExecSuccess(num, task, draft, execRes);
+      if (execRes.counterpartyAmbiguous) return await askClarificationInGroup(num, task, execRes.error, execRes.noMatch ? "confirm_new" : "counterparty", execRes.suggestions || []);
+      return await reportExecBlocked(num, task, execRes.error);
+    }
+
+    const wantsNew = NEW_COUNTERPARTY_RE.test(trimmed) || (aiqInfo.kind === "confirm_new" && CONFIRM_YES_RE.test(trimmed));
+    if (wantsNew) {
+      const execRes = await internal1cPost({ action: "execute_task", num, confirmNewCounterparty: true });
+      if (execRes.ok) return await reportExecSuccess(num, task, draft, execRes);
+      return await reportExecBlocked(num, task, execRes.error);
+    }
+
+    /* похоже на уточнённое название или ИНН — обновляем черновик и пробуем резолвить
+       ещё раз по-настоящему (без force и без confirm), ограничивая число попыток */
+    const rounds = Number(task.aiClarifyRounds || 0);
+    const cleanedForInn = trimmed.replace(/\s+/g, "");
+    task.aiDraft = {
+      ...draft,
+      counterparty: INN_ONLY_RE.test(cleanedForInn) ? draft.counterparty : trimmed,
+      ...(INN_ONLY_RE.test(cleanedForInn) ? { counterpartyInn: cleanedForInn } : {}),
+    };
+    await redis.set("task:" + num, task);
+
+    if (rounds >= 2) {
+      /* два уточнения подряд ни к чему не привели — не зацикливаемся дальше,
+         создаём документ без привязки контрагента и прозрачно об этом сообщаем */
+      const execRes = await internal1cPost({ action: "execute_task", num, force: true });
+      if (execRes.ok) {
+        return await reportExecSuccess(num, task, task.aiDraft, {
+          ...execRes,
+          note: `Контрагент так и не был однозначно опознан после ${rounds + 1} уточнений — документ создан БЕЗ привязки контрагента, заполните её вручную в 1С.`,
+        });
+      }
+      return await reportExecBlocked(num, task, execRes.error);
+    }
+
+    task.aiClarifyRounds = rounds + 1;
+    await redis.set("task:" + num, task);
+    const execRes = await internal1cPost({ action: "execute_task", num });
+    if (execRes.ok) return await reportExecSuccess(num, task, task.aiDraft, execRes);
+    if (execRes.counterpartyAmbiguous) return await askClarificationInGroup(num, task, execRes.error, execRes.noMatch ? "confirm_new" : "counterparty", execRes.suggestions || []);
+    if (execRes.duplicate) return await askClarificationInGroup(num, task, execRes.error, "duplicate", []);
+    return await reportExecBlocked(num, task, execRes.error);
+  }
+
+  /* Подтверждение на вопрос про возможный дубль документа — это простое да/нет,
+     не про контрагента и не повод пере-спрашивать ИИ весь черновик заново. */
+  if (extraContext && aiqInfo && aiqInfo.kind === "duplicate" && task.aiDraft) {
+    const confirms = CONFIRM_YES_RE.test(String(extraContext).trim()) || /отдельн|разн|повтор|ещ[её] раз|продолж/i.test(extraContext);
+    if (confirms) {
+      const execRes = await internal1cPost({ action: "execute_task", num, force: true });
+      if (execRes.ok) return await reportExecSuccess(num, task, task.aiDraft, execRes);
+      if (execRes.counterpartyAmbiguous) return await askClarificationInGroup(num, task, execRes.error, execRes.noMatch ? "confirm_new" : "counterparty", execRes.suggestions || []);
+      return await reportExecBlocked(num, task, execRes.error);
+    }
+    return await reportExecBlocked(num, task, `Похоже на повтор документа — по ответу бухгалтера решено НЕ создавать документ повторно. Если нужно всё-таки создать — откройте задачу и повторите вручную.`);
+  }
 
   let clientInfo = null;
   try {
@@ -348,6 +487,7 @@ async function runAutoWork(num, extraContext) {
     return { ok: false, error: "не удалось подготовить черновик" };
   }
   task.aiDraft = { ...draft, generatedAt: new Date().toISOString(), by: "AI-бухгалтер (авто)" };
+  task.aiClarifyRounds = 0;
   await redis.set("task:" + num, task);
 
   await internalCrmPost({ action: "status", num, status: "in_progress", assignee: "AI-бухгалтер" });
@@ -356,50 +496,21 @@ async function runAutoWork(num, extraContext) {
   const missingAmount = AUTOWORK_MONEY_TYPES.has(draft.type) && !draft.amount;
   if (draft.type === "other" || lowConfidence || missingAmount) {
     const q = draft.notes || `Не до конца понял заявку по задаче №${num} (тип: ${draft.type}, сумма: ${draft.amount ?? "не указана"}). Что нужно сделать?`;
-    return await askClarificationInGroup(num, task, q);
+    return await askClarificationInGroup(num, task, q, "draft_unclear", []);
   }
 
-  const execRes = await internal1cPost({ action: "execute_task", num, force: !!extraContext });
+  const execRes = await internal1cPost({ action: "execute_task", num });
 
-  if (execRes.ok) {
-    const entityName = ENTITY_RU_NAMES[execRes.entity] || execRes.entity;
-    const summary =
-      `✅ Задача №${num} — документ подготовлен в 1С
+  if (execRes.ok) return await reportExecSuccess(num, task, draft, execRes);
 
-` +
-      `📄 ${entityName}${execRes.number ? " №" + execRes.number : ""}
-` +
-      (draft.amount ? `💰 Сумма: ${Number(draft.amount).toLocaleString("ru-RU")} UZS
-` : "") +
-      (draft.counterparty ? `🤝 Контрагент: ${draft.counterparty}
-` : "") +
-      (execRes.note ? `⚠️ ${execRes.note}
-` : "") +
-      `
-👉 Осталось бухгалтеру: проверить документ в 1С и провести/отправить.`;
-    await tgGroupSend({
-      text: escapeHtmlLocal(summary),
-      ...(task.gmsg ? { reply_to_message_id: task.gmsg } : {}),
-    });
-    await pushThreadEntry(num, summary);
-    await logEvent("ai_autowork_done", { num, entity: execRes.entity, ref: execRes.ref });
-    return { ok: true, executed: true, entity: execRes.entity, ref: execRes.ref, number: execRes.number };
+  if (execRes.counterpartyAmbiguous) {
+    return await askClarificationInGroup(num, task, execRes.error, execRes.noMatch ? "confirm_new" : "counterparty", execRes.suggestions || []);
+  }
+  if (execRes.duplicate) {
+    return await askClarificationInGroup(num, task, execRes.error, "duplicate", []);
   }
 
-  if (execRes.counterpartyAmbiguous || execRes.duplicate) {
-    return await askClarificationInGroup(num, task, execRes.error);
-  }
-
-  const blockedText = `⚠️ Задача №${num} — не смог выполнить автоматически: ${execRes.error || "неизвестная ошибка"}.
-
-👉 Нужна ручная обработка бухгалтером.`;
-  await tgGroupSend({
-    text: escapeHtmlLocal(blockedText),
-    ...(task.gmsg ? { reply_to_message_id: task.gmsg } : {}),
-  });
-  await pushThreadEntry(num, blockedText);
-  await logEvent("ai_autowork_blocked", { num, error: execRes.error });
-  return { ok: false, blocked: true, error: execRes.error };
+  return await reportExecBlocked(num, task, execRes.error);
 }
 
 module.exports = async (req, res) => {
@@ -521,7 +632,7 @@ module.exports = async (req, res) => {
       }
 
       if (body && body.action === "auto_work" && body.num) {
-        const r = await runAutoWork(Number(body.num), body.extraContext || null);
+        const r = await runAutoWork(Number(body.num), body.extraContext || null, body.aiqInfo || null);
         return res.status(200).json(r);
       }
 

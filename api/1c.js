@@ -258,6 +258,10 @@ async function syncCounterparties(appPath, appName, actor) {
     const norm = normCompany(cp.name);
     if (!norm) continue;
     await redis.set("1c:cpmap:" + appPath + ":" + norm, { ref: cp.ref, name: cp.name, inn: cp.inn });
+    /* ИНН — более надёжный идентификатор контрагента, чем название (не зависит от
+       опечаток, сокращений "ООО/МЧЖ", падежей и т.п.) — кэшируем отдельно для точного
+       поиска по ИНН перед тем, как вообще пробовать нечёткий поиск по имени. */
+    if (cp.inn) await redis.set("1c:cpinn:" + appPath + ":" + String(cp.inn).trim(), { ref: cp.ref, name: cp.name, inn: cp.inn });
     light.push({ ref: cp.ref, name: cp.name, norm });
     count++;
   }
@@ -272,6 +276,14 @@ async function counterpartyRefFor(appPath, name) {
   const norm = normCompany(name || "");
   if (!norm) return null;
   return await redis.get("1c:cpmap:" + appPath + ":" + norm);
+}
+
+/* Поиск контрагента по ИНН — приоритетнее поиска по названию, т.к. ИНН уникален
+   и не зависит от того, как именно клиент/бот написали название компании. */
+async function counterpartyRefByInn(appPath, inn) {
+  const clean = String(inn || "").trim();
+  if (!clean || clean.length < 7) return null;
+  return await redis.get("1c:cpinn:" + appPath + ":" + clean);
 }
 
 /* Нечёткий поиск контрагента, когда точного совпадения по имени нет — например,
@@ -556,7 +568,11 @@ async function findRecentSimilarDoc1C(company, type, amount, excludeNum) {
   return null;
 }
 
-async function executeTaskIn1C(num, actor, force) {
+async function executeTaskIn1C(num, actor, opts) {
+  opts = opts || {};
+  const force = !!opts.force;
+  const counterpartyRefOverride = opts.counterpartyRef || null;
+  const confirmNewCounterparty = !!opts.confirmNewCounterparty;
   const task = await redis.get("task:" + num);
   if (!task) return { ok: false, error: "task not found" };
   const draft = task.aiDraft;
@@ -600,36 +616,58 @@ async function executeTaskIn1C(num, actor, force) {
   let newCounterpartyCreated = false;
   if (COUNTERPARTY_KEY_ENTITIES.has(entity) && draft.counterparty) {
     try {
-      const cp = await counterpartyRefFor(org.app, draft.counterparty);
+      let cp = null;
+      if (counterpartyRefOverride) {
+        /* бухгалтер явно выбрал конкретный вариант из предложенных ранее — это
+           самый надёжный источник, доверяем без повторной проверки */
+        cp = { ref: counterpartyRefOverride };
+      } else {
+        /* ИНН — самый надёжный идентификатор контрагента (не зависит от опечаток,
+           сокращений "ООО/МЧЖ", падежей и т.п.), проверяем его в первую очередь,
+           и только потом падаем на поиск по названию */
+        if (draft.counterpartyInn) cp = await counterpartyRefByInn(org.app, draft.counterpartyInn);
+        if (!cp) cp = await counterpartyRefFor(org.app, draft.counterparty);
+      }
+
       if (cp) {
         fields["Контрагент_Key"] = cp.ref;
         try {
           const ctRef = await contractRefFor(org.app, cp.ref, draft.counterpartyContract);
           if (ctRef) fields["ДоговорКонтрагента_Key"] = ctRef;
         } catch (e2) { /* договор не критичен */ }
-      } else if (!force) {
-        /* точного совпадения нет — если есть похожие варианты, лучше переспросить,
-           чем молча создать документ без Контрагент_Key или привязать не того контрагента */
-        try {
-          const suggestions = await suggestCounterparties(org.app, draft.counterparty, 3);
-          if (suggestions.length) {
-            return {
-              ok: false,
-              counterpartyAmbiguous: true,
-              suggestions,
-              error: `Контрагент «${draft.counterparty}» не найден точно в синке 1С. Похожие варианты: ${suggestions.map((s) => s.name).join(", ")}. Уточните, какой контрагент имелся в виду, или вызовите execute_task с force:true, чтобы создать документ без привязки контрагента.`,
-            };
-          }
-        } catch (e3) { /* noop */ }
-        /* совсем ничего похожего нет — значит контрагента реально ещё нет в 1С;
-           создаём минимальную черновую карточку, чтобы поле не осталось пустым */
-        try {
-          const created = await createCounterpartyDraft(org.app, draft.counterparty, draft.counterpartyInn);
-          if (created) {
-            fields["Контрагент_Key"] = created.ref;
-            newCounterpartyCreated = true;
-          }
-        } catch (e4) { /* не критично — документ всё равно создастся, просто без Контрагент_Key */ }
+      } else {
+        /* ни точного совпадения по ИНН, ни по названию — прежде чем создавать
+           новую карточку или молча оставлять документ без контрагента, всегда
+           даём человеку возможность подтвердить (кроме явного confirmNewCounterparty) */
+        const suggestions = await suggestCounterparties(org.app, draft.counterparty, 3).catch(() => []);
+        if (confirmNewCounterparty) {
+          /* бухгалтер явно подтвердил, что это новый контрагент — только теперь
+             создаём минимальную черновую карточку */
+          try {
+            const created = await createCounterpartyDraft(org.app, draft.counterparty, draft.counterpartyInn);
+            if (created) {
+              fields["Контрагент_Key"] = created.ref;
+              newCounterpartyCreated = true;
+            }
+          } catch (e4) { /* не критично — документ всё равно создастся, просто без Контрагент_Key */ }
+        } else if (suggestions.length) {
+          return {
+            ok: false,
+            counterpartyAmbiguous: true,
+            suggestions,
+            error: `Контрагент «${draft.counterparty}»${draft.counterpartyInn ? " (ИНН " + draft.counterpartyInn + ")" : ""} не найден точно в 1С (ни по ИНН, ни по названию). Похожие варианты: ${suggestions.map((s) => s.name).join(", ")}. Ответьте названием нужного варианта, либо напишите "новый контрагент", если его точно ещё нет в 1С.`,
+          };
+        } else if (!force) {
+          return {
+            ok: false,
+            counterpartyAmbiguous: true,
+            suggestions: [],
+            noMatch: true,
+            error: `Контрагент «${draft.counterparty}»${draft.counterpartyInn ? " (ИНН " + draft.counterpartyInn + ")" : ""} не найден в 1С ни по ИНН, ни по названию, и похожих вариантов тоже нет. Это точно новый контрагент? Ответьте "да, новый" — я создам карточку, или уточните точное название/ИНН.`,
+          };
+        }
+        /* force:true без confirmNewCounterparty — крайний случай (явно запрошено
+           продолжить без привязки контрагента), документ создаётся без Контрагент_Key */
       }
     } catch (e) { /* контрагент не критичен — документ всё равно создастся с текстом в комментарии */ }
   }
@@ -787,7 +825,12 @@ module.exports = async (req, res) => {
       let body = req.body;
       if (typeof body === "string") { try { body = JSON.parse(body); } catch { body = {}; } }
       if (body && body.action === "execute_task" && body.num) {
-        return res.status(200).json(await executeTaskIn1C(Number(body.num), authUser?.name, !!body.force));
+        const opts = {
+          force: !!body.force,
+          counterpartyRef: body.counterpartyRef || null,
+          confirmNewCounterparty: !!body.confirmNewCounterparty,
+        };
+        return res.status(200).json(await executeTaskIn1C(Number(body.num), authUser?.name, opts));
       }
       if (body && body.action === "create_draft" && body.app && body.entity) {
         /* whitelist: entity должен быть одним из реальных типов документов БУ УЗ 3.0,

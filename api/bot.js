@@ -42,7 +42,7 @@ const redis = new Redis({
    зеркалит такой же вызов в api/crm.js. Сам /api/ai проверяет тублер
    ai:settings.autoWork и молча выходит, если он выключен. */
 const AUTOWORK_API_ORIGIN = process.env.CRM_API_ORIGIN || "https://finpulse-crm.vercel.app";
-async function triggerAutoWork(num, extraContext) {
+async function triggerAutoWork(num, extraContext, aiqInfo) {
   const JWT_SECRET = process.env.JWT_SECRET || process.env.CRM_JWT_SECRET || "";
   if (!JWT_SECRET) return;
   try {
@@ -51,7 +51,7 @@ async function triggerAutoWork(num, extraContext) {
     await fetch(`${AUTOWORK_API_ORIGIN}/api/ai`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-      body: JSON.stringify({ action: "auto_work", num, ...(extraContext ? { extraContext } : {}) }),
+      body: JSON.stringify({ action: "auto_work", num, ...(extraContext ? { extraContext } : {}), ...(aiqInfo ? { aiqInfo } : {}) }),
       signal: AbortSignal.timeout(55000),
     });
   } catch (e) { console.error("triggerAutoWork:", num, String(e).slice(0, 200)); }
@@ -1436,7 +1436,7 @@ bot.on("message", async (ctx) => {
         return ctx.reply("Пожалуйста, ответьте текстом на вопрос ИИ-бухгалтера.", { reply_to_message_id: msg.message_id }).catch(() => {});
       }
       try { await redis.del("aiq:" + msg.reply_to_message.message_id); } catch (e) {}
-      await triggerAutoWork(Number(aiq.num), replyText);
+      await triggerAutoWork(Number(aiq.num), replyText, { kind: aiq.kind || "generic", suggestions: aiq.suggestions || [] });
       return;
     }
 
