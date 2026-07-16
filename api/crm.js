@@ -1517,7 +1517,31 @@ module.exports = async (req, res) => {
       if (body && body.action === "client_update" && body.id) {
         if (!isStaff) return res.status(403).json({ ok: false, error: "forbidden" });
         const actor = (authUser && authUser.name) || "CRM";
-        const r = await patchClient(body.id, body.patch || {}, actor);
+        const patch = { ...(body.patch || {}) };
+        /* Телефон компании — ключ привязки к Telegram и логин кабинета:
+           менять может только супер-админ, с переносом индекса. */
+        if (Object.prototype.hasOwnProperty.call(patch, "phone")) {
+          const isAdmin = !rolesEnforced || (authUser && authUser.role === "admin");
+          if (!isAdmin) return res.status(403).json({ ok: false, error: "телефон компании меняет только супер-админ" });
+          const c = await redis.get("client:" + body.id);
+          if (!c) return res.status(200).json({ ok: false, error: "client not found" });
+          const newP = patch.phone ? normPhone(patch.phone) : null;
+          const oldP = c.phone ? normPhone(c.phone) : null;
+          if (newP !== oldP) {
+            if (newP) {
+              const takenBy = await redis.get("clientphone:" + newP);
+              if (takenBy && takenBy !== body.id) return res.status(200).json({ ok: false, error: "этот телефон уже привязан к другой карточке" });
+            }
+            if (oldP && (await redis.get("clientphone:" + oldP)) === body.id) await redis.del("clientphone:" + oldP);
+            if (newP) await redis.set("clientphone:" + newP, body.id);
+            c.phone = newP;
+            c.updatedAt = new Date().toISOString();
+            await redis.set("client:" + body.id, c);
+            await logEvent("crm", "client_phone_changed", { id: body.id, by: actor });
+          }
+          delete patch.phone;
+        }
+        const r = await patchClient(body.id, patch, actor);
         return res.status(200).json(r);
       }
       if (body && body.action === "task_create") {

@@ -97,18 +97,37 @@ async function pingAll() {
 
 /* ---- организации приложения (после включения состава OData) ---- */
 async function getOrgs(appPath) {
-  const r = await odata(appPath, "Catalog_Организации", "$format=json&$select=Ref_Key,Description,НаименованиеПолное,ИНН,КодПоОКПО&$filter=DeletionMark eq false");
+  const r = await odata(appPath, "Catalog_Организации",
+    "$format=json&$select=Ref_Key,Description,НаименованиеПолное,ИНН,КодНалоговогоОргана,ОсновнойБанковскийСчет_Key,ДатаРегистрации&$filter=DeletionMark eq false");
   if (r.status === 401) return { ok: false, error: "auth: проверьте ODATA_1C_LOGIN/PASSWORD (пользователь 1С в этой базе)" };
-  if (r.status === 404) return { ok: false, error: "Catalog_Организации не включён в состав OData — ждём поддержку Clobus" };
+  if (r.status === 404) return { ok: false, error: "Catalog_Организации не включён в состав OData — настройте состав REST-сервиса" };
   if (r.status !== 200 || !r.json) return { ok: false, error: `HTTP ${r.status}` };
+
+  /* банковские счета и банки — чтобы заполнить р/с, МФО и название банка */
+  let accounts = {}, banks = {};
+  try {
+    const ra = await odata(appPath, "Catalog_БанковскиеСчета", "$format=json&$select=Ref_Key,НомерСчета,Банк_Key");
+    for (const a of ra.json?.value || []) accounts[a.Ref_Key] = a;
+    const rb = await odata(appPath, "Catalog_Банки", "$format=json&$select=Ref_Key,Code,Description");
+    for (const b of rb.json?.value || []) banks[b.Ref_Key] = b;
+  } catch (e) { /* реквизиты банка не критичны */ }
+
   return {
     ok: true,
-    orgs: (r.json.value || []).map((o) => ({
-      ref: o.Ref_Key,
-      name: o.Description,
-      fullName: o["НаименованиеПолное"] || null,
-      inn: o["ИНН"] || null,
-    })),
+    orgs: (r.json.value || []).map((o) => {
+      const acc = accounts[o["ОсновнойБанковскийСчет_Key"]] || null;
+      const bank = acc ? banks[acc["Банк_Key"]] || null : null;
+      return {
+        ref: o.Ref_Key,
+        name: o.Description,
+        fullName: o["НаименованиеПолное"] || null,
+        inn: o["ИНН"] || null,
+        taxOffice: o["КодНалоговогоОргана"] || null,
+        bankAccount: acc ? acc["НомерСчета"] || null : null,
+        mfo: bank ? bank.Code || null : null,
+        bank: bank ? bank.Description || null : null,
+      };
+    }),
   };
 }
 
@@ -128,17 +147,27 @@ async function syncOrgs(appPath, appName, actor) {
     const norm = normCompany(org.name);
     if (!norm) continue;
     const existingId = await redis.get("clientcompany:" + norm);
+    const fields1c = {
+      inn: org.inn || null,
+      fullName: org.fullName || null,
+      taxOffice: org.taxOffice || null,
+      bankAccount: org.bankAccount || null,
+      mfo: org.mfo || null,
+      bank: org.bank || null,
+    };
     if (existingId) {
       const c = (await redis.get("client:" + existingId)) || {};
-      const next = { ...c, inn: c.inn || org.inn, source1c: { app: appPath, ref: org.ref, name: org.name }, updatedAt: new Date().toISOString() };
+      const next = { ...c, updatedAt: new Date().toISOString(), source1c: { app: appPath, ref: org.ref, name: org.name } };
+      for (const [k, v] of Object.entries(fields1c)) if (v != null) next[k] = v;
       await redis.set("client:" + existingId, next);
       updated++;
       await redis.set("1c:orgmap:" + norm, { app: appPath, ref: org.ref, name: org.name });
     } else {
       const id = "c" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
       await redis.set("client:" + id, {
-        id, company: org.name, inn: org.inn || null, phone: null, telegramId: null,
+        id, company: org.name, phone: null, telegramId: null,
         status: "active", tariff: null, assignedTo: null,
+        ...fields1c,
         source1c: { app: appPath, ref: org.ref, name: org.name },
         createdAt: new Date().toISOString(),
       });

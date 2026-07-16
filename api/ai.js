@@ -72,16 +72,16 @@ const AGENT_TOOLS = [
   { type: "function", function: { name: "memory_add", description: "Записать устойчивый факт о компании в память (аренда, банк, договорённости).", parameters: { type: "object", properties: { company: { type: "string" }, fact: { type: "string" } }, required: ["company", "fact"] } } },
 ];
 
-async function callTool(name, args, authHeader) {
+async function callTool(name, args, authHeaders) {
   const base = name.startsWith("crm") ? SELF + "/api/crm" : SELF + "/api/1c";
   try {
     let r;
     if (name.endsWith("_get")) {
-      r = await fetch(base + "?" + String(args.query || ""), { headers: { authorization: authHeader }, signal: AbortSignal.timeout(20000) });
+      r = await fetch(base + "?" + String(args.query || ""), { headers: authHeaders, signal: AbortSignal.timeout(20000) });
     } else {
       r = await fetch(base, {
         method: "POST",
-        headers: { "content-type": "application/json", authorization: authHeader },
+        headers: { "content-type": "application/json", ...authHeaders },
         body: JSON.stringify(args.body || {}),
         signal: AbortSignal.timeout(25000),
       });
@@ -93,7 +93,7 @@ async function callTool(name, args, authHeader) {
   }
 }
 
-async function runAgent(messages, authHeader) {
+async function runAgent(messages, authHeaders) {
   const KEY = process.env.OPENAI_API_KEY;
   const MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
   const convo = [{ role: "system", content: AGENT_SYSTEM }, ...messages.slice(-20)];
@@ -242,7 +242,10 @@ module.exports = async (req, res) => {
       if (body && body.action === "agent" && Array.isArray(body.messages)) {
         const isAdmin = !JWT_SECRET || (authUser && authUser.role === "admin");
         if (!isAdmin) return res.status(403).json({ ok: false, error: "только супер-админ" });
-        const out = await runAgent(body.messages, req.headers.authorization || "");
+        const out = await runAgent(body.messages, {
+          ...(req.headers.authorization ? { authorization: req.headers.authorization } : {}),
+          ...(req.headers["x-api-key"] ? { "x-api-key": req.headers["x-api-key"] } : {}),
+        });
         let chatId = body.chatId || null;
         try { chatId = await persistChat(body.chatId, body.messages, out.reply, out.steps); } catch (e) { /* noop */ }
         await logEvent("ai_agent_run", { steps: out.steps.length, by: actor });
