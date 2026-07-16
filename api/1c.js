@@ -305,6 +305,55 @@ async function nomenclatureRefFor(appPath, name) {
   return await redis.get("1c:nommap:" + appPath + ":" + norm);
 }
 
+/* ---------- Договоры контрагентов — для ДоговорКонтрагента_Key ---------- */
+async function getContracts(appPath) {
+  const r = await odata(appPath, "Catalog_ДоговорыКонтрагентов",
+    "$format=json&$select=Ref_Key,Description,Owner_Key,Организация_Key,Номер&$filter=DeletionMark eq false");
+  if (r.status === 401) return { ok: false, error: "auth: проверьте ODATA_1C_LOGIN/PASSWORD" };
+  if (r.status === 404) return { ok: false, error: "Catalog_ДоговорыКонтрагентов не включён в состав OData — настройте состав REST-сервиса" };
+  if (r.status !== 200 || !r.json) return { ok: false, error: `HTTP ${r.status}` };
+  return {
+    ok: true,
+    contracts: (r.json.value || []).map((c) => ({
+      ref: c.Ref_Key, name: c.Description, owner: c["Owner_Key"] || null, number: c["Номер"] || null,
+    })),
+  };
+}
+
+async function syncContracts(appPath, appName, actor) {
+  const res = await getContracts(appPath);
+  if (!res.ok) return res;
+  const perOwner = new Map();
+  for (const ct of res.contracts) {
+    if (!ct.owner) continue;
+    const norm = normCompany(ct.name);
+    if (norm) await redis.set("1c:ctmap:" + appPath + ":" + ct.owner + ":" + norm, { ref: ct.ref, name: ct.name });
+    if (!perOwner.has(ct.owner)) perOwner.set(ct.owner, []);
+    perOwner.get(ct.owner).push(ct.ref);
+  }
+  let count = 0;
+  for (const [owner, refs] of perOwner.entries()) {
+    /* если у контрагента ровно один договор — используем его по умолчанию,
+       когда AI-черновик не называет договор явно */
+    if (refs.length === 1) {
+      await redis.set("1c:ctdefault:" + appPath + ":" + owner, refs[0]);
+      count++;
+    }
+  }
+  await logEvent("1c_sync_contracts", { app: appName, count: res.contracts.length, defaults: count, by: actor || "CRM" });
+  return { ok: true, total: res.contracts.length, owners: perOwner.size, defaults: count };
+}
+
+async function contractRefFor(appPath, ownerRef, name) {
+  if (!ownerRef) return null;
+  const norm = normCompany(name || "");
+  if (norm) {
+    const exact = await redis.get("1c:ctmap:" + appPath + ":" + ownerRef + ":" + norm);
+    if (exact) return exact.ref;
+  }
+  return await redis.get("1c:ctdefault:" + appPath + ":" + ownerRef);
+}
+
 /* тип черновика → название табличной части документа, куда кладём строки товаров/услуг */
 const TABULAR_PART_BY_TYPE = {
   realizatsiya: "Товары",
@@ -372,7 +421,13 @@ async function executeTaskIn1C(num, actor) {
   if (COUNTERPARTY_KEY_ENTITIES.has(entity) && draft.counterparty) {
     try {
       const cp = await counterpartyRefFor(org.app, draft.counterparty);
-      if (cp) fields["Контрагент_Key"] = cp.ref;
+      if (cp) {
+        fields["Контрагент_Key"] = cp.ref;
+        try {
+          const ctRef = await contractRefFor(org.app, cp.ref, draft.counterpartyContract);
+          if (ctRef) fields["ДоговорКонтрагента_Key"] = ctRef;
+        } catch (e2) { /* договор не критичен */ }
+      }
     } catch (e) { /* контрагент не критичен — документ всё равно создастся с текстом в комментарии */ }
   }
 
@@ -475,6 +530,13 @@ module.exports = async (req, res) => {
         if (!r.ok) return res.status(200).json(r);
         return res.status(200).json({ ok: true, count: r.items.length, sample: r.items.slice(0, 3) });
       }
+      if (q.r === "contracts" && q.app) {
+        const a = findApp(q.app);
+        if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
+        const r = await getContracts(a.path);
+        if (!r.ok) return res.status(200).json(r);
+        return res.status(200).json({ ok: true, count: r.contracts.length, sample: r.contracts.slice(0, 3) });
+      }
       if (q.r === "schema2" && q.app && q.entity) {
         /* временный роут: свойства произвольной сущности $metadata (Catalog_ или Document_),
            чтобы свериться перед добавлением синка контрагентов/договоров. */
@@ -515,7 +577,7 @@ module.exports = async (req, res) => {
         const props = [...m[0].matchAll(/<Property Name="([^"]+)" Type="([^"]+)"/g)].map((x) => ({ name: x[1], type: x[2] }));
         return res.status(200).json({ ok: true, props });
       }
-      return res.status(200).json({ ok: true, service: "Finpulse 1C bridge", routes: ["apps", "ping", "meta", "orgs", "counterparties", "nomenclature"] });
+      return res.status(200).json({ ok: true, service: "Finpulse 1C bridge", routes: ["apps", "ping", "meta", "orgs", "counterparties", "nomenclature", "contracts"] });
     }
 
     if (req.method === "POST") {
@@ -553,6 +615,11 @@ module.exports = async (req, res) => {
         const a = findApp(body.app);
         if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
         return res.status(200).json(await syncNomenclature(a.path, a.name, authUser?.name));
+      }
+      if (body && body.action === "sync_contracts" && body.app) {
+        const a = findApp(body.app);
+        if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
+        return res.status(200).json(await syncContracts(a.path, a.name, authUser?.name));
       }
       return res.status(200).json({ ok: false, error: "unknown action" });
     }
