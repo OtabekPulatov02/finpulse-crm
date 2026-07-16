@@ -335,12 +335,19 @@ ${escapeHtmlLocal(questionText)}
       await redis.set("aiq:" + msg.message_id, { num, kind: kind || "generic", suggestions: suggestions || [] }, { ex: 3 * 24 * 3600 });
     } catch (e) { /* noop */ }
   }
+  /* Дублируем состояние ожидания по номеру задачи (не только по message_id
+     Telegram-сообщения) — это позволяет бухгалтеру ответить на уточнение
+     прямо в чате задачи в CRM, а не только реплаем в Telegram-группе. */
+  try {
+    await redis.set("aiq_task:" + num, { kind: kind || "generic", suggestions: suggestions || [] }, { ex: 3 * 24 * 3600 });
+  } catch (e) { /* noop */ }
   await pushThreadEntry(num, `🤖 Уточняю в группе бухгалтеров: ${questionText}`);
   await logEvent("ai_autowork_asked", { num, kind: kind || "generic" });
   return { ok: true, asked: true, question: questionText };
 }
 
 async function reportExecSuccess(num, task, draft, execRes) {
+  try { await redis.del("aiq_task:" + num); } catch (e) { /* noop */ }
   const entityName = ENTITY_RU_NAMES[execRes.entity] || execRes.entity;
   const summary =
     `✅ Задача №${num} — документ подготовлен в 1С
@@ -366,6 +373,7 @@ async function reportExecSuccess(num, task, draft, execRes) {
 }
 
 async function reportExecBlocked(num, task, errorText) {
+  try { await redis.del("aiq_task:" + num); } catch (e) { /* noop */ }
   const blockedText = `⚠️ Задача №${num} — не смог выполнить автоматически: ${errorText || "неизвестная ошибка"}.
 
 👉 Нужна ручная обработка бухгалтером.`;

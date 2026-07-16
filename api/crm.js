@@ -122,14 +122,14 @@ if (JWT_SECRET && JWT_SECRET.length < 32) {
    если автономность выключена, так что вызывать можно безусловно.
    Ошибки не должны ломать создание задачи — поэтому best-effort. */
 const AI_API_ORIGIN = process.env.CRM_API_ORIGIN || "https://finpulse-crm.vercel.app";
-async function triggerAutoWork(num) {
+async function triggerAutoWork(num, extraContext, aiqInfo) {
   if (!JWT_SECRET) return;
   try {
     const token = jwt.sign({ role: "admin", name: "CRM (авто-триггер)" }, JWT_SECRET, { algorithm: "HS256", expiresIn: "3m" });
     await fetch(`${AI_API_ORIGIN}/api/ai`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-      body: JSON.stringify({ action: "auto_work", num }),
+      body: JSON.stringify({ action: "auto_work", num, ...(extraContext ? { extraContext } : {}), ...(aiqInfo ? { aiqInfo } : {}) }),
       signal: AbortSignal.timeout(55000),
     });
   } catch (e) { console.error("triggerAutoWork:", num, String(e).slice(0, 200)); }
@@ -1640,6 +1640,21 @@ module.exports = async (req, res) => {
           ? { filename: body.filename, mimeType: body.mimeType, dataBase64: body.dataBase64 }
           : null;
         const r = await sendTaskMessage(task, body.text, actor, isClient, file);
+        /* Если ИИ-бухгалтер сейчас ждёт уточнения по этой задаче (см.
+           askClarificationInGroup/aiq_task в api/ai.js) — сообщение
+           бухгалтера в чате CRM тоже должно "докормить" автономный
+           конвейер, а не только реплай в Telegram-группе. Реагируем
+           только на сообщения от бухгалтера/админа (не от клиента), и
+           только если это обычный текст (не файл-only). */
+        if (isStaff && !isClient && typeof body.text === "string" && body.text.trim()) {
+          try {
+            const aiq = await redis.get("aiq_task:" + Number(body.num));
+            if (aiq) {
+              await redis.del("aiq_task:" + Number(body.num));
+              triggerAutoWork(Number(body.num), body.text.trim(), { kind: aiq.kind || "generic", suggestions: aiq.suggestions || [] });
+            }
+          } catch (e) { console.error("crm chat aiq resume:", body.num, String(e).slice(0, 200)); }
+        }
         return res.status(200).json(r);
       }
       if (body && body.action === "client_delete" && body.id) {
