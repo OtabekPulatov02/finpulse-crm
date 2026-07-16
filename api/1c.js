@@ -583,9 +583,22 @@ async function executeTaskIn1C(num, actor, force) {
   const r = await createDraftDoc(org.app, entity, fields);
   if (!r.ok) return r;
 
-  task.doc1c = { app: org.app, entity, ref: r.ref, number: r.number, at: new Date().toISOString(), by: actor || "AI" };
+  const at = new Date().toISOString();
+  task.doc1c = { app: org.app, entity, ref: r.ref, number: r.number, at, by: actor || "AI" };
   await redis.set("task:" + num, task);
   await logEvent("1c_draft_created", { num, entity, app: org.app, ref: r.ref, by: actor || "AI" });
+
+  /* отдельный журнал всех документов, созданных ИИ в 1С — для аудита/видимости
+     бухгалтеру, отдельно от общего технического лога logs:crm */
+  try {
+    await redis.lpush("1c:doclog", JSON.stringify({
+      num, entity, ref: r.ref, number: r.number, app: org.app,
+      company: task.company, type: draft.type, amount: draft.amount || null,
+      counterparty: draft.counterparty || null, at, by: actor || "AI",
+    }));
+    await redis.ltrim("1c:doclog", 0, 499);
+  } catch (e) { /* журнал не критичен для самой операции */ }
+
   return { ok: true, entity, ref: r.ref, number: r.number, app: org.app };
 }
 
@@ -661,6 +674,17 @@ module.exports = async (req, res) => {
         if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
         return res.status(200).json(await getAccountTurnover(a.path, q.account, q.from, q.to));
       }
+      if (q.r === "doclog") {
+        const limit = Math.min(Number(q.limit) || 50, 200);
+        const rows = (await redis.lrange("1c:doclog", 0, limit - 1)) || [];
+        const items = rows.map((r) => { try { return typeof r === "string" ? JSON.parse(r) : r; } catch { return null; } }).filter(Boolean);
+        const apps = await getApps();
+        for (const it of items) {
+          const a = apps.find((x) => x.path === it.app);
+          it.appName = a ? a.name : null;
+        }
+        return res.status(200).json({ ok: true, items });
+      }
       if (q.r === "schema2" && q.app && q.entity) {
         /* временный роут: свойства произвольной сущности $metadata (Catalog_ или Document_),
            чтобы свериться перед добавлением синка контрагентов/договоров. */
@@ -701,7 +725,7 @@ module.exports = async (req, res) => {
         const props = [...m[0].matchAll(/<Property Name="([^"]+)" Type="([^"]+)"/g)].map((x) => ({ name: x[1], type: x[2] }));
         return res.status(200).json({ ok: true, props });
       }
-      return res.status(200).json({ ok: true, service: "Finpulse 1C bridge", routes: ["apps", "ping", "meta", "orgs", "counterparties", "nomenclature", "contracts", "turnover"] });
+      return res.status(200).json({ ok: true, service: "Finpulse 1C bridge", routes: ["apps", "ping", "meta", "orgs", "counterparties", "nomenclature", "contracts", "turnover", "doclog"] });
     }
 
     if (req.method === "POST") {
