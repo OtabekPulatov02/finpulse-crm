@@ -769,6 +769,18 @@ module.exports = async (req, res) => {
 
     if (req.method === "GET") {
       if (q.r === "apps") return res.status(200).json({ ok: true, apps });
+      if (q.r === "rawmeta" && q.app && q.entity) {
+        const a = findApp(q.app);
+        if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
+        const r = await fetch(`${BASE}${a.path}/odata/standard.odata/$metadata`, {
+          headers: { Authorization: authHeader() },
+          signal: AbortSignal.timeout(20000),
+        });
+        const xml = await r.text();
+        const idx = xml.indexOf(`Name="${q.entity}"`);
+        if (idx === -1) return res.status(200).json({ ok: false, error: "not found" });
+        return res.status(200).json({ ok: true, slice: xml.slice(idx - 30, idx + 2500) });
+      }
       if (q.r === "entityprops" && q.app && q.entity) {
         const a = findApp(q.app);
         if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
