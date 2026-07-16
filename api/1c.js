@@ -743,6 +743,12 @@ module.exports = async (req, res) => {
         if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
         return res.status(200).json(await getOrgs(a.path));
       }
+      if (q.r === "checkdoc" && q.app && q.entity && q.ref) {
+        const a = findApp(q.app);
+        if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
+        const r = await odata(a.path, `${String(q.entity)}(guid'${String(q.ref)}')`, "$format=json&$select=Ref_Key,Number,Контрагент_Key,ДоговорКонтрагента_Key,Организация_Key,Сумма,СуммаНДС,СуммаДокумента,СтавкаНДС,Комментарий");
+        return res.status(200).json({ ok: r.status === 200, status: r.status, doc: r.json || null });
+      }
       if (q.r === "counterparties" && q.app) {
         const a = findApp(q.app);
         if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
