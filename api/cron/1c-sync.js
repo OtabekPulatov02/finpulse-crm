@@ -76,6 +76,7 @@ module.exports = async (req, res) => {
       row.nomenclature = await callApi1c(token, { action: "sync_nomenclature", app: a.code });
       row.reports = await callApi1c(token, { action: "sync_reports", app: a.code });
       row.employees = await callApi1c(token, { action: "sync_employees", app: a.code });
+      row.positions = await callApi1c(token, { action: "sync_positions", app: a.code });
       results.push(row);
     }
 

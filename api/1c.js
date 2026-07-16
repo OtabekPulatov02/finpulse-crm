@@ -516,6 +516,50 @@ async function suggestEmployees(appPath, name, limit) {
   return scored.map((e) => ({ ref: e.ref, name: e.name }));
 }
 
+/* ---------- Должности (Catalog_Должности) — для Должность_Key в
+   приказе о приёме на работу. Необязательное поле: если позиция в тексте
+   заявки не указана или не находится точно, документ всё равно создаётся —
+   просто без Должность_Key, это не блокирует кадровый документ так, как
+   отсутствие Сотрудник_Key. ---------- */
+async function getPositions(appPath) {
+  const r = await odata(appPath, "Catalog_Должности",
+    "$format=json&$select=Ref_Key,Description&$filter=DeletionMark eq false and IsFolder eq false");
+  if (r.status === 401) return { ok: false, error: "auth: проверьте ODATA_1C_LOGIN/PASSWORD" };
+  if (r.status === 404) return { ok: false, error: "Catalog_Должности не включён в состав OData — настройте состав REST-сервиса" };
+  if (r.status !== 200 || !r.json) return { ok: false, error: `HTTP ${r.status}` };
+  return { ok: true, positions: (r.json.value || []).map((p) => ({ ref: p.Ref_Key, name: p.Description })) };
+}
+
+async function syncPositions(appPath, appName, actor) {
+  const res = await getPositions(appPath);
+  if (!res.ok) return res;
+  let count = 0;
+  const light = [];
+  for (const p of res.positions) {
+    const norm = normCompany(p.name);
+    if (!norm) continue;
+    await redis.set("1c:posmap:" + appPath + ":" + norm, { ref: p.ref, name: p.name });
+    light.push({ ref: p.ref, name: p.name, norm });
+    count++;
+  }
+  await redis.set("1c:poslist:" + appPath, light);
+  await logEvent("1c_sync_positions", { app: appName, count, by: actor || "CRM" });
+  return { ok: true, total: res.positions.length, mapped: count };
+}
+
+async function positionRefFor(appPath, name) {
+  const norm = normCompany(name || "");
+  if (!norm) return null;
+  const exact = await redis.get("1c:posmap:" + appPath + ":" + norm);
+  if (exact) return exact;
+  const list = (await redis.get("1c:poslist:" + appPath)) || [];
+  const scored = list
+    .map((p) => ({ ...p, score: fuzzyScore(norm, p.norm) }))
+    .filter((p) => p.score >= 0.6)
+    .sort((a, b) => b.score - a.score);
+  return scored.length ? { ref: scored[0].ref, name: scored[0].name } : null;
+}
+
 /* ---------- Обороты по счёту (регистр бухгалтерии "Хозрасчетный") ----------
    Субконто (аналитика по контрагентам) не публикуется в этой конфигурации через
    стандартный OData-интерфейс, поэтому точную задолженность конкретного контрагента
@@ -895,6 +939,17 @@ async function executeTaskIn1C(num, actor, opts) {
     } else if (entity === "Document_Увольнение" && draft.hrDate) {
       fields["ДатаУвольнения"] = draft.hrDate;
     }
+
+    /* должность (Должность_Key) — необязательное поле, только для приёма на
+       работу. Если в заявке она не указана или не находится в 1С — документ
+       всё равно создаётся, просто без Должность_Key (не блокируем кадровый
+       документ из-за необязательного реквизита). */
+    if (entity === "Document_ПриемНаРаботу" && draft.position) {
+      try {
+        const pos = await positionRefFor(org.app, draft.position);
+        if (pos) fields["Должность_Key"] = pos.ref;
+      } catch (e) { /* необязательно — не критично */ }
+    }
   }
 
   /* строки товаров/услуг: если черновик содержит items и для этого типа документа
@@ -1020,6 +1075,13 @@ module.exports = async (req, res) => {
         if (!r.ok) return res.status(200).json(r);
         return res.status(200).json({ ok: true, count: r.employees.length, sample: r.employees.slice(0, 3) });
       }
+      if (q.r === "positions" && q.app) {
+        const a = findApp(q.app);
+        if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
+        const r = await getPositions(a.path);
+        if (!r.ok) return res.status(200).json(r);
+        return res.status(200).json({ ok: true, count: r.positions.length, sample: r.positions.slice(0, 3) });
+      }
       if (q.r === "nomenclature" && q.app) {
         const a = findApp(q.app);
         if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
@@ -1063,36 +1125,7 @@ module.exports = async (req, res) => {
         items.sort((x, y) => new Date(x.nextExpectedPeriodEnd) - new Date(y.nextExpectedPeriodEnd));
         return res.status(200).json({ ok: true, items, note: "nextExpectedPeriodEnd — вывод из истории и периодичности отчёта в 1С (ближайший период после сегодняшней даты), НЕ официальный срок сдачи (1С его не хранит отдельным полем); используйте как ориентир, сверяйте с реальным сроком. periodsSkipped>0 значит в 1С давно не готовили этот отчёт — стоит проверить, не отстаёт ли синк или сама подготовка отчёта в 1С." });
       }
-      if (q.r === "rawmeta3" && q.app && q.entity) {
-        const a = findApp(q.app);
-        if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
-        const r = await odata(a.path, "$metadata", "");
-        const xml = r.text || "";
-        const idx = xml.indexOf(`EntityType Name="${q.entity}"`);
-        if (idx < 0) return res.status(200).json({ ok: false, error: "entity not found in metadata", status: r.status, len: xml.length });
-        const endIdx = xml.indexOf("</EntityType>", idx);
-        const chunk = xml.slice(idx, endIdx > 0 ? endIdx + 13 : idx + 6000);
-        const props = [];
-        const re = /<Property Name="([^"]+)"\s+Type="([^"]+)"/g;
-        let m;
-        while ((m = re.exec(chunk))) props.push({ name: m[1], type: m[2] });
-        return res.status(200).json({ ok: true, entity: q.entity, propsCount: props.length, props });
-      }
-      if (q.r === "entitynames4" && q.app && q.kw) {
-        const a = findApp(q.app);
-        if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
-        const r = await odata(a.path, "$metadata", "");
-        const xml = r.text || "";
-        const re = /EntityType Name="([^"]+)"/g;
-        let m;
-        const names = [];
-        const kw = String(q.kw).toLowerCase();
-        while ((m = re.exec(xml))) {
-          if (m[1].toLowerCase().includes(kw)) names.push(m[1]);
-        }
-        return res.status(200).json({ ok: true, count: names.length, names });
-      }
-      return res.status(200).json({ ok: true, service: "Finpulse 1C bridge", routes: ["apps", "ping", "meta", "orgs", "counterparties", "nomenclature", "contracts", "turnover", "doclog", "reports", "employees"] });
+      return res.status(200).json({ ok: true, service: "Finpulse 1C bridge", routes: ["apps", "ping", "meta", "orgs", "counterparties", "nomenclature", "contracts", "turnover", "doclog", "reports", "employees", "positions"] });
     }
 
     if (req.method === "POST") {
@@ -1111,6 +1144,11 @@ module.exports = async (req, res) => {
         const a = findApp(body.app);
         if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
         return res.status(200).json(await syncEmployees(a.path, a.name, authUser?.name));
+      }
+      if (body && body.action === "sync_positions" && body.app) {
+        const a = findApp(body.app);
+        if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
+        return res.status(200).json(await syncPositions(a.path, a.name, authUser?.name));
       }
       if (body && body.action === "create_draft" && body.app && body.entity) {
         /* whitelist: entity должен быть одним из реальных типов документов БУ УЗ 3.0,
