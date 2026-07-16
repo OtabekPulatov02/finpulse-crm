@@ -380,6 +380,12 @@ module.exports = async (req, res) => {
         if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
         return res.status(200).json(await getOrgs(a.path));
       }
+      if (q.r === "docbynum" && q.app && q.entity && q.num) {
+        const a = findApp(q.app);
+        if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
+        const r = await odata(a.path, String(q.entity), `$format=json&$filter=Number eq '${String(q.num)}'`);
+        return res.status(200).json({ ok: r.status === 200, status: r.status, docs: r.json?.value || [] });
+      }
       if (q.r === "counterparties" && q.app) {
         const a = findApp(q.app);
         if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
