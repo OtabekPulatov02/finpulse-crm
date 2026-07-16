@@ -253,12 +253,17 @@ async function syncCounterparties(appPath, appName, actor) {
   const res = await getCounterparties(appPath);
   if (!res.ok) return res;
   let count = 0;
+  const light = [];
   for (const cp of res.counterparties) {
     const norm = normCompany(cp.name);
     if (!norm) continue;
     await redis.set("1c:cpmap:" + appPath + ":" + norm, { ref: cp.ref, name: cp.name, inn: cp.inn });
+    light.push({ ref: cp.ref, name: cp.name, norm });
     count++;
   }
+  /* лёгкий кэш всего списка (без doc/comment полей) — нужен только для нечёткого поиска,
+     чтобы не делать дорогой перебор ключей Redis на каждый черновик */
+  await redis.set("1c:cplist:" + appPath, light);
   await logEvent("1c_sync_counterparties", { app: appName, count, by: actor || "CRM" });
   return { ok: true, total: res.counterparties.length, mapped: count };
 }
@@ -267,6 +272,33 @@ async function counterpartyRefFor(appPath, name) {
   const norm = normCompany(name || "");
   if (!norm) return null;
   return await redis.get("1c:cpmap:" + appPath + ":" + norm);
+}
+
+/* Нечёткий поиск контрагента, когда точного совпадения по имени нет — например,
+   при опечатке, другой раскладке (латиница вместо кириллицы) или сокращении.
+   Простая эвристика без внешних библиотек: пересечение по подстроке + общим словам. */
+function fuzzyScore(a, b) {
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+  if (a.includes(b) || b.includes(a)) return 0.85;
+  const wa = new Set(a.split(" ").filter((w) => w.length > 2));
+  const wb = new Set(b.split(" ").filter((w) => w.length > 2));
+  if (!wa.size || !wb.size) return 0;
+  let common = 0;
+  for (const w of wa) if (wb.has(w)) common++;
+  return common / Math.max(wa.size, wb.size);
+}
+
+async function suggestCounterparties(appPath, name, limit) {
+  const norm = normCompany(name || "");
+  if (!norm) return [];
+  const list = (await redis.get("1c:cplist:" + appPath)) || [];
+  const scored = list
+    .map((c) => ({ ...c, score: fuzzyScore(norm, c.norm) }))
+    .filter((c) => c.score >= 0.4)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit || 3);
+  return scored.map((c) => ({ ref: c.ref, name: c.name }));
 }
 
 /* ---------- Номенклатура (товары/услуги) — для строк документов ---------- */
@@ -466,6 +498,20 @@ async function executeTaskIn1C(num, actor, force) {
           const ctRef = await contractRefFor(org.app, cp.ref, draft.counterpartyContract);
           if (ctRef) fields["ДоговорКонтрагента_Key"] = ctRef;
         } catch (e2) { /* договор не критичен */ }
+      } else if (!force) {
+        /* точного совпадения нет — если есть похожие варианты, лучше переспросить,
+           чем молча создать документ без Контрагент_Key или привязать не того контрагента */
+        try {
+          const suggestions = await suggestCounterparties(org.app, draft.counterparty, 3);
+          if (suggestions.length) {
+            return {
+              ok: false,
+              counterpartyAmbiguous: true,
+              suggestions,
+              error: `Контрагент «${draft.counterparty}» не найден точно в синке 1С. Похожие варианты: ${suggestions.map((s) => s.name).join(", ")}. Уточните, какой контрагент имелся в виду, или вызовите execute_task с force:true, чтобы создать документ без привязки контрагента.`,
+            };
+          }
+        } catch (e3) { /* noop — нет подсказок, создаём без Контрагент_Key как раньше */ }
       }
     } catch (e) { /* контрагент не критичен — документ всё равно создастся с текстом в комментарии */ }
   }
