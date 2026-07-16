@@ -289,6 +289,32 @@ function fuzzyScore(a, b) {
   return common / Math.max(wa.size, wb.size);
 }
 
+/* Создаёт минимальную черновую карточку контрагента в 1С, если его вообще нет
+   в справочнике (ни точного совпадения, ни похожих вариантов) — чтобы поле
+   "Контрагент" в документе не оставалось пустым, когда у AI есть название/ИНН
+   из заявки. Бухгалтер потом донаполнит и провалидирует карточку. */
+async function createCounterpartyDraft(appPath, name, inn) {
+  const url = `${BASE}${appPath}/odata/standard.odata/Catalog_Контрагенты?$format=json`;
+  const fields = { "Description": String(name).slice(0, 150) };
+  if (inn) fields["ИНН"] = String(inn).slice(0, 20);
+  const r = await fetch(url, {
+    method: "POST",
+    headers: { Authorization: authHeader(), Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify(fields),
+    signal: AbortSignal.timeout(20000),
+  });
+  const text = await r.text();
+  let json = null;
+  try { json = JSON.parse(text); } catch (e) { /* noop */ }
+  if (r.status >= 400 || !json?.Ref_Key) return null;
+  /* сразу кладём в карту синка, чтобы follow-up операции по этому же имени его находили */
+  try {
+    const norm = normCompany(name);
+    if (norm) await redis.set("1c:cpmap:" + appPath + ":" + norm, { ref: json.Ref_Key, name, inn: inn || null });
+  } catch (e) { /* noop */ }
+  return { ref: json.Ref_Key, name };
+}
+
 async function suggestCounterparties(appPath, name, limit) {
   const norm = normCompany(name || "");
   if (!norm) return [];
@@ -435,6 +461,54 @@ function vatEnumFromText(vat) {
   return "НДС12";
 }
 
+/* Сопоставление типа черновика → реальные поля суммы/НДС документа 1С (сверено с $metadata).
+   "esf" — у счёта-фактуры отдельно хранятся Сумма (нетто), СуммаНДС и СуммаДокумента (брутто).
+   "total" — у остальных денежных документов одно поле СуммаДокумента + флаги "включает НДС/без НДС". */
+const AMOUNT_FIELD_MAP = {
+  invoice_esf: { mode: "esf", total: "СуммаДокумента", net: "Сумма", vatSum: "СуммаНДС", vatRate: "СтавкаНДС", noVatFlag: "СчетФактураБезНДС" },
+  payment_out: { mode: "total", total: "СуммаДокумента", vatRate: "СтавкаНДС", vatSum: "СуммаНДС" },
+  payment_in: { mode: "total", total: "СуммаДокумента", vatRate: "СтавкаНДС", vatSum: "СуммаНДС" },
+  schet: { mode: "total", total: "СуммаДокумента", includesVatFlag: "СуммаВключаетНДС", noVatFlag: "ДокументБезНДС" },
+  postuplenie: { mode: "total", total: "СуммаДокумента", includesVatFlag: "СуммаВключаетНДС" },
+  realizatsiya: { mode: "total", total: "СуммаДокумента", includesVatFlag: "СуммаВключаетНДС", noVatFlag: "ДокументБезНДС" },
+  act_sverki: { mode: "total", total: "СуммаДокумента" },
+};
+
+/* Заполняет реальные поля суммы/НДС документа из черновика (draft.amount/draft.vat),
+   либо, если есть построчные items, из их суммы — это точнее плоского draft.amount. */
+function applyAmountFields(fields, draftType, amount, vatText) {
+  const map = AMOUNT_FIELD_MAP[draftType];
+  if (!map || !amount) return;
+  const total = Math.round(Number(amount) * 100) / 100;
+  if (!total) return;
+  const vatIsNone = /без/i.test(String(vatText || ""));
+  const rateStr = vatEnumFromText(vatText);
+
+  if (map.mode === "esf") {
+    let vatSum = 0, net = total;
+    if (!vatIsNone) {
+      const rate = rateStr.includes("12") ? 0.12 : 0;
+      net = Math.round((total / (1 + rate)) * 100) / 100;
+      vatSum = Math.round((total - net) * 100) / 100;
+    }
+    fields[map.net] = net;
+    fields[map.vatSum] = vatSum;
+    fields[map.total] = total;
+    if (map.vatRate) fields[map.vatRate] = rateStr;
+    if (map.noVatFlag) fields[map.noVatFlag] = vatIsNone;
+  } else {
+    fields[map.total] = total;
+    if (map.includesVatFlag) fields[map.includesVatFlag] = !vatIsNone;
+    if (map.noVatFlag) fields[map.noVatFlag] = vatIsNone;
+    if (map.vatRate) fields[map.vatRate] = rateStr;
+    if (map.vatSum && !vatIsNone) {
+      const rate = rateStr.includes("12") ? 0.12 : 0;
+      const net = total / (1 + rate);
+      fields[map.vatSum] = Math.round((total - net) * 100) / 100;
+    }
+  }
+}
+
 /* Универсальное создание документа (черновик, Posted=false) */
 async function createDraftDoc(appPath, entity, fields) {
   const url = `${BASE}${appPath}/odata/standard.odata/${entity}?$format=json`;
@@ -523,6 +597,7 @@ async function executeTaskIn1C(num, actor, force) {
 
   /* если для этого типа документа реквизит контрагента — простая ссылка,
      подставляем реальный Ref_Key из синка контрагентов (не только текст в комментарии) */
+  let newCounterpartyCreated = false;
   if (COUNTERPARTY_KEY_ENTITIES.has(entity) && draft.counterparty) {
     try {
       const cp = await counterpartyRefFor(org.app, draft.counterparty);
@@ -545,7 +620,16 @@ async function executeTaskIn1C(num, actor, force) {
               error: `Контрагент «${draft.counterparty}» не найден точно в синке 1С. Похожие варианты: ${suggestions.map((s) => s.name).join(", ")}. Уточните, какой контрагент имелся в виду, или вызовите execute_task с force:true, чтобы создать документ без привязки контрагента.`,
             };
           }
-        } catch (e3) { /* noop — нет подсказок, создаём без Контрагент_Key как раньше */ }
+        } catch (e3) { /* noop */ }
+        /* совсем ничего похожего нет — значит контрагента реально ещё нет в 1С;
+           создаём минимальную черновую карточку, чтобы поле не осталось пустым */
+        try {
+          const created = await createCounterpartyDraft(org.app, draft.counterparty, draft.counterpartyInn);
+          if (created) {
+            fields["Контрагент_Key"] = created.ref;
+            newCounterpartyCreated = true;
+          }
+        } catch (e4) { /* не критично — документ всё равно создастся, просто без Контрагент_Key */ }
       }
     } catch (e) { /* контрагент не критичен — документ всё равно создастся с текстом в комментарии */ }
   }
@@ -554,6 +638,7 @@ async function executeTaskIn1C(num, actor, force) {
      есть табличная часть "Товары" — строим реальные строки со ссылкой на номенклатуру
      (если найдена по синку), иначе оставляем только текст в наименовании строки. */
   const tabularPart = TABULAR_PART_BY_TYPE[draft.type];
+  let itemsTotal = 0;
   if (tabularPart && Array.isArray(draft.items) && draft.items.length) {
     const rows = [];
     for (let i = 0; i < draft.items.length; i++) {
@@ -561,6 +646,7 @@ async function executeTaskIn1C(num, actor, force) {
       const qty = Number(it.qty) || 1;
       const price = Number(it.price) || 0;
       const amount = Number(it.amount) || qty * price;
+      itemsTotal += amount;
       const vatRate = vatEnumFromText(it.vat || draft.vat);
       let nom = null;
       try { nom = it.name ? await nomenclatureRefFor(org.app, it.name) : null; } catch (e) { /* noop */ }
@@ -579,6 +665,12 @@ async function executeTaskIn1C(num, actor, force) {
     }
     fields[tabularPart] = rows;
   }
+
+  /* заполняем реальные поля суммы/НДС документа (не только текст в комментарии) —
+     из суммы строк товаров, если они есть, иначе из общей суммы черновика */
+  try {
+    applyAmountFields(fields, draft.type, itemsTotal || draft.amount, draft.vat);
+  } catch (e) { /* сумма не критична для самого создания черновика */ }
 
   const r = await createDraftDoc(org.app, entity, fields);
   if (!r.ok) return r;
@@ -599,7 +691,10 @@ async function executeTaskIn1C(num, actor, force) {
     await redis.ltrim("1c:doclog", 0, 499);
   } catch (e) { /* журнал не критичен для самой операции */ }
 
-  return { ok: true, entity, ref: r.ref, number: r.number, app: org.app };
+  return {
+    ok: true, entity, ref: r.ref, number: r.number, app: org.app,
+    ...(newCounterpartyCreated ? { note: `Контрагент «${draft.counterparty}» не найден в 1С — создана новая черновая карточка контрагента, проверьте её данные перед проведением документа.` } : {}),
+  };
 }
 
 /* ---------------- handler ---------------- */
@@ -647,20 +742,6 @@ module.exports = async (req, res) => {
         const a = findApp(q.app);
         if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
         return res.status(200).json(await getOrgs(a.path));
-      }
-      if (q.r === "schema2" && q.app && q.entity) {
-        const a = findApp(q.app);
-        if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
-        const url = `${BASE}${a.path}/odata/standard.odata/$metadata`;
-        const r = await fetch(url, { headers: { Authorization: authHeader() }, signal: AbortSignal.timeout(20000) });
-        const text = await r.text();
-        if (r.status !== 200) return res.status(200).json({ ok: false, status: r.status, error: text.slice(0, 300) });
-        const re = new RegExp(`<EntityType Name="${String(q.entity)}"[\\s\\S]*?</EntityType>`);
-        const m = re.exec(text);
-        if (!m) return res.status(200).json({ ok: false, error: "entity not found" });
-        const props = [...m[0].matchAll(/<Property Name="([^"]+)"/g)].map((x) => x[1]);
-        const navs = [...m[0].matchAll(/<NavigationProperty Name="([^"]+)"/g)].map((x) => x[1]);
-        return res.status(200).json({ ok: true, props, navs });
       }
       if (q.r === "counterparties" && q.app) {
         const a = findApp(q.app);
