@@ -769,6 +769,21 @@ module.exports = async (req, res) => {
 
     if (req.method === "GET") {
       if (q.r === "apps") return res.status(200).json({ ok: true, apps });
+      if (q.r === "entityprops" && q.app && q.entity) {
+        const a = findApp(q.app);
+        if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
+        const r = await fetch(`${BASE}${a.path}/odata/standard.odata/$metadata`, {
+          headers: { Authorization: authHeader() },
+          signal: AbortSignal.timeout(20000),
+        });
+        const xml = await r.text();
+        const re = new RegExp(`<EntityType Name="${q.entity}"[\\s\\S]*?</EntityType>`);
+        const m = re.exec(xml);
+        if (!m) return res.status(200).json({ ok: false, error: "entity not found" });
+        const props = [...m[0].matchAll(/<Property Name="([^"]+)" Type="([^"]+)"/g)].map((p) => ({ name: p[1], type: p[2] }));
+        const navs = [...m[0].matchAll(/<NavigationProperty Name="([^"]+)"/g)].map((p) => p[1]);
+        return res.status(200).json({ ok: true, entity: q.entity, props, navs });
+      }
       if (q.r === "entitynames3" && q.app) {
         const a = findApp(q.app);
         if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
