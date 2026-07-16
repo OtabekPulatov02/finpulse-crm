@@ -458,6 +458,64 @@ async function getAccountTurnover(appPath, accountCode, dateFrom, dateTo) {
   };
 }
 
+/* ---------- Календарь регламентированной отчётности ----------
+   Document_РегламентированныйОтчет хранит уже подготовленные/сданные в 1С
+   регламентированные отчёты (НДФЛ+соцналог, налог на прибыль, баланс и т.п.)
+   с периодичностью и периодом — но НЕ хранит официальный срок сдачи как
+   отдельное поле (СтатусОтчета в данной базе всегда пустой). Поэтому честный
+   подход: показываем историю по каждому виду отчёта (когда и за какой период
+   готовился последний раз) и вычисляем СЛЕДУЮЩИЙ ожидаемый период по его же
+   периодичности — это не официальный дедлайн из 1С, а выведенная из истории
+   догадка, и явно помечается как таковая. */
+function addPeriod(date, periodicity) {
+  const d = new Date(date);
+  const p = String(periodicity || "").toLowerCase();
+  if (p.includes("квартал")) d.setMonth(d.getMonth() + 3);
+  else if (p.includes("год")) d.setFullYear(d.getFullYear() + 1);
+  else if (p.includes("полугод")) d.setMonth(d.getMonth() + 6);
+  else d.setMonth(d.getMonth() + 1); // по умолчанию считаем "Месяц"
+  return d;
+}
+
+async function getRegulatedReports(appPath) {
+  const r = await odata(appPath, "Document_РегламентированныйОтчет",
+    "$format=json&$select=Date,НаименованиеОтчета,Периодичность,ПредставлениеПериода,ДатаНачала,ДатаОкончания&$orderby=Date desc&$top=500");
+  if (r.status === 401) return { ok: false, error: "auth: проверьте ODATA_1C_LOGIN/PASSWORD" };
+  if (r.status === 404) return { ok: false, error: "Document_РегламентированныйОтчет не включён в состав OData — настройте состав REST-сервиса" };
+  if (r.status !== 200 || !r.json) return { ok: false, error: `HTTP ${r.status}` };
+  return {
+    ok: true,
+    reports: (r.json.value || []).map((d) => ({
+      name: d["НаименованиеОтчета"] || "", periodicity: d["Периодичность"] || "",
+      periodLabel: d["ПредставлениеПериода"] || "", periodStart: d["ДатаНачала"] || null, periodEnd: d["ДатаОкончания"] || null,
+      preparedAt: d["Date"] || null,
+    })),
+  };
+}
+
+async function syncRegulatedReports(appPath, appName, actor) {
+  const res = await getRegulatedReports(appPath);
+  if (!res.ok) return res;
+  /* по каждому виду отчёта оставляем только самую свежую запись (по ДатаОкончания) */
+  const byName = new Map();
+  for (const r of res.reports) {
+    if (!r.name || !r.periodEnd) continue;
+    const prev = byName.get(r.name);
+    if (!prev || new Date(r.periodEnd) > new Date(prev.periodEnd)) byName.set(r.name, r);
+  }
+  const calendar = [...byName.values()].map((r) => {
+    const nextPeriodEnd = addPeriod(r.periodEnd, r.periodicity);
+    return {
+      name: r.name, periodicity: r.periodicity, lastPeriodLabel: r.periodLabel,
+      lastPeriodEnd: r.periodEnd, lastPreparedAt: r.preparedAt,
+      nextExpectedPeriodEnd: nextPeriodEnd.toISOString().slice(0, 10),
+    };
+  }).sort((a, b) => new Date(a.nextExpectedPeriodEnd) - new Date(b.nextExpectedPeriodEnd));
+  await redis.set("1c:reports:" + appPath, calendar);
+  await logEvent("1c_sync_reports", { app: appName, count: calendar.length, by: actor || "CRM" });
+  return { ok: true, total: res.reports.length, types: calendar.length };
+}
+
 /* тип черновика → название табличной части документа, куда кладём строки товаров/услуг */
 const TABULAR_PART_BY_TYPE = {
   realizatsiya: "Товары",
@@ -769,53 +827,6 @@ module.exports = async (req, res) => {
 
     if (req.method === "GET") {
       if (q.r === "apps") return res.status(200).json({ ok: true, apps });
-      if (q.r === "docsample" && q.app && q.entity) {
-        const a = findApp(q.app);
-        if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
-        const sel = q.select ? `&$select=${q.select}` : "";
-        const r2 = await odata(a.path, q.entity, `$format=json&$top=10&$orderby=Date desc${sel}`);
-        return res.status(200).json({ ok: true, status: r2.status, sample: r2.json?.value || r2.text?.slice(0, 500) });
-      }
-      if (q.r === "rawmeta" && q.app && q.entity) {
-        const a = findApp(q.app);
-        if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
-        const r = await fetch(`${BASE}${a.path}/odata/standard.odata/$metadata`, {
-          headers: { Authorization: authHeader() },
-          signal: AbortSignal.timeout(20000),
-        });
-        const xml = await r.text();
-        const idx = xml.indexOf(`Name="${q.entity}"`);
-        if (idx === -1) return res.status(200).json({ ok: false, error: "not found" });
-        return res.status(200).json({ ok: true, slice: xml.slice(idx - 30, idx + 2500) });
-      }
-      if (q.r === "entityprops" && q.app && q.entity) {
-        const a = findApp(q.app);
-        if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
-        const r = await fetch(`${BASE}${a.path}/odata/standard.odata/$metadata`, {
-          headers: { Authorization: authHeader() },
-          signal: AbortSignal.timeout(20000),
-        });
-        const xml = await r.text();
-        const re = new RegExp(`<EntityType Name="${q.entity}"[\\s\\S]*?</EntityType>`);
-        const m = re.exec(xml);
-        if (!m) return res.status(200).json({ ok: false, error: "entity not found" });
-        const props = [...m[0].matchAll(/<Property Name="([^"]+)"\s+Type="([^"]+)"/g)].map((p) => ({ name: p[1], type: p[2] }));
-        const navs = [...m[0].matchAll(/<NavigationProperty Name="([^"]+)"/g)].map((p) => p[1]);
-        return res.status(200).json({ ok: true, entity: q.entity, props, navs });
-      }
-      if (q.r === "entitynames3" && q.app) {
-        const a = findApp(q.app);
-        if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
-        const r = await fetch(`${BASE}${a.path}/odata/standard.odata/$metadata`, {
-          headers: { Authorization: authHeader() },
-          signal: AbortSignal.timeout(20000),
-        });
-        const xml = await r.text();
-        const names = [...xml.matchAll(/EntityType Name="([^"]+)"/g)].map((m) => m[1]);
-        const kw = /отчет|деклар|регламент|срок|календар|событ|уведомлен|период|напомин|задач|дедлайн/i;
-        const hits = names.filter((n) => kw.test(n));
-        return res.status(200).json({ ok: true, total: names.length, hits });
-      }
       if (q.r === "ping") return res.status(200).json({ ok: true, apps: await pingAll() });
       if (q.r === "meta" && q.app) {
         const a = findApp(q.app);
@@ -865,7 +876,20 @@ module.exports = async (req, res) => {
         }
         return res.status(200).json({ ok: true, items });
       }
-      return res.status(200).json({ ok: true, service: "Finpulse 1C bridge", routes: ["apps", "ping", "meta", "orgs", "counterparties", "nomenclature", "contracts", "turnover", "doclog"] });
+      if (q.r === "reports") {
+        /* календарь регламентированной отчётности по всем синканным базам сразу
+           (или одной, если передан app) — отсортировано по ближайшему ожидаемому периоду */
+        const apps = await getApps();
+        const targets = q.app ? apps.filter((a) => a.code === String(q.app)) : apps;
+        const items = [];
+        for (const a of targets) {
+          const cal = (await redis.get("1c:reports:" + a.path)) || [];
+          for (const c of cal) items.push({ ...c, appCode: a.code, appName: a.name });
+        }
+        items.sort((x, y) => new Date(x.nextExpectedPeriodEnd) - new Date(y.nextExpectedPeriodEnd));
+        return res.status(200).json({ ok: true, items, note: "nextExpectedPeriodEnd — вывод из истории и периодичности отчёта в 1С, НЕ официальный срок сдачи (1С его не хранит отдельным полем); используйте как ориентир, сверяйте с реальным сроком." });
+      }
+      return res.status(200).json({ ok: true, service: "Finpulse 1C bridge", routes: ["apps", "ping", "meta", "orgs", "counterparties", "nomenclature", "contracts", "turnover", "doclog", "reports"] });
     }
 
     if (req.method === "POST") {
@@ -908,6 +932,11 @@ module.exports = async (req, res) => {
         const a = findApp(body.app);
         if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
         return res.status(200).json(await syncNomenclature(a.path, a.name, authUser?.name));
+      }
+      if (body && body.action === "sync_reports" && body.app) {
+        const a = findApp(body.app);
+        if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
+        return res.status(200).json(await syncRegulatedReports(a.path, a.name, authUser?.name));
       }
       if (body && body.action === "sync_contracts" && body.app) {
         const a = findApp(body.app);
