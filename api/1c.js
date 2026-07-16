@@ -884,7 +884,8 @@ module.exports = async (req, res) => {
         const xml = await r.text();
         const idx = xml.indexOf(`Name="${q.entity}"`);
         if (idx === -1) return res.status(200).json({ ok: false, error: "not found" });
-        return res.status(200).json({ ok: true, slice: xml.slice(idx - 30, idx + 3000) });
+        const len = Math.min(Number(q.len) || 3000, 8000);
+        return res.status(200).json({ ok: true, slice: xml.slice(idx - 30, idx + len) });
       }
       if (q.r === "doclog") {
         const limit = Math.min(Number(q.limit) || 50, 200);
