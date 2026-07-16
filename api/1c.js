@@ -1014,6 +1014,35 @@ module.exports = async (req, res) => {
         items.sort((x, y) => new Date(x.nextExpectedPeriodEnd) - new Date(y.nextExpectedPeriodEnd));
         return res.status(200).json({ ok: true, items, note: "nextExpectedPeriodEnd — вывод из истории и периодичности отчёта в 1С (ближайший период после сегодняшней даты), НЕ официальный срок сдачи (1С его не хранит отдельным полем); используйте как ориентир, сверяйте с реальным сроком. periodsSkipped>0 значит в 1С давно не готовили этот отчёт — стоит проверить, не отстаёт ли синк или сама подготовка отчёта в 1С." });
       }
+      if (q.r === "rawmeta3" && q.app && q.entity) {
+        const a = findApp(q.app);
+        if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
+        const r = await odata(a.path, "$metadata", "");
+        const xml = r.text || "";
+        const idx = xml.indexOf(`EntityType Name="${q.entity}"`);
+        if (idx < 0) return res.status(200).json({ ok: false, error: "entity not found in metadata" });
+        const endIdx = xml.indexOf("</EntityType>", idx);
+        const chunk = xml.slice(idx, endIdx > 0 ? endIdx + 13 : idx + 6000);
+        const props = [];
+        const re = /<Property Name="([^"]+)"\s+Type="([^"]+)"/g;
+        let m;
+        while ((m = re.exec(chunk))) props.push({ name: m[1], type: m[2] });
+        return res.status(200).json({ ok: true, entity: q.entity, propsCount: props.length, props });
+      }
+      if (q.r === "entitynames4" && q.app && q.kw) {
+        const a = findApp(q.app);
+        if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
+        const r = await odata(a.path, "$metadata", "");
+        const xml = r.text || "";
+        const re = /EntityType Name="([^"]+)"/g;
+        let m;
+        const names = [];
+        const kw = String(q.kw).toLowerCase();
+        while ((m = re.exec(xml))) {
+          if (m[1].toLowerCase().includes(kw)) names.push(m[1]);
+        }
+        return res.status(200).json({ ok: true, count: names.length, names });
+      }
       return res.status(200).json({ ok: true, service: "Finpulse 1C bridge", routes: ["apps", "ping", "meta", "orgs", "counterparties", "nomenclature", "contracts", "turnover", "doclog", "reports", "employees"] });
     }
 
