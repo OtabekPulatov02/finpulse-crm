@@ -792,7 +792,7 @@ module.exports = async (req, res) => {
         const re = new RegExp(`<EntityType Name="${q.entity}"[\\s\\S]*?</EntityType>`);
         const m = re.exec(xml);
         if (!m) return res.status(200).json({ ok: false, error: "entity not found" });
-        const props = [...m[0].matchAll(/<Property Name="([^"]+)" Type="([^"]+)"/g)].map((p) => ({ name: p[1], type: p[2] }));
+        const props = [...m[0].matchAll(/<Property Name="([^"]+)"\s+Type="([^"]+)"/g)].map((p) => ({ name: p[1], type: p[2] }));
         const navs = [...m[0].matchAll(/<NavigationProperty Name="([^"]+)"/g)].map((p) => p[1]);
         return res.status(200).json({ ok: true, entity: q.entity, props, navs });
       }
