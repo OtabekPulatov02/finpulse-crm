@@ -389,7 +389,34 @@ async function createDraftDoc(appPath, entity, fields) {
 }
 
 /* Выполнение задачи CRM: черновик AI → документ в 1С базе клиента */
-async function executeTaskIn1C(num, actor) {
+/* Проверка дублей: не создаём ещё один документ, если за последние 24ч по этой же
+   компании/типу/сумме уже был создан документ в 1С (в т.ч. из другой задачи) —
+   защищает от повторных ЭСФ/платежей при неаккуратных или повторных поручениях. */
+async function findRecentSimilarDoc1C(company, type, amount, excludeNum) {
+  const n = Number((await redis.get("counter:task")) || 0);
+  if (!n) return null;
+  const max = 100 + n;
+  const from = Math.max(101, max - 49); // последние ~50 задач достаточно для окна в 24ч
+  const keys = [];
+  for (let i = max; i >= from; i--) keys.push("task:" + i);
+  const rows = keys.length ? await redis.mget(...keys) : [];
+  const now = Date.now();
+  const DAY = 24 * 60 * 60 * 1000;
+  for (const t of rows) {
+    if (!t || t.num === excludeNum || !t.doc1c || !t.aiDraft) continue;
+    if (t.company !== company) continue;
+    if (t.aiDraft.type !== type) continue;
+    const createdAt = new Date(t.doc1c.at || 0).getTime();
+    if (!createdAt || now - createdAt > DAY) continue;
+    const a1 = Number(t.aiDraft.amount) || 0;
+    const a2 = Number(amount) || 0;
+    if (a1 && a2 && Math.abs(a1 - a2) / Math.max(a1, a2) > 0.01) continue; // суммы различаются более чем на 1%
+    return { num: t.num, ref: t.doc1c.ref, number: t.doc1c.number, at: t.doc1c.at };
+  }
+  return null;
+}
+
+async function executeTaskIn1C(num, actor, force) {
   const task = await redis.get("task:" + num);
   if (!task) return { ok: false, error: "task not found" };
   const draft = task.aiDraft;
@@ -398,6 +425,18 @@ async function executeTaskIn1C(num, actor) {
   if (!entity) return { ok: false, error: `тип «${draft.type}» пока не маппится на документ 1С` };
   const org = await orgFor(task.company);
   if (!org) return { ok: false, error: `организация «${task.company}» не найдена в картах 1С — выполните синк организаций` };
+
+  if (!force) {
+    const dup = await findRecentSimilarDoc1C(task.company, draft.type, draft.amount, num);
+    if (dup) {
+      return {
+        ok: false,
+        duplicate: true,
+        error: `Похоже, такой документ уже создан сегодня: задача №${dup.num}, документ №${dup.number || dup.ref}. Если это разные операции — вызовите execute_task ещё раз с force:true.`,
+        existingTask: dup.num,
+      };
+    }
+  }
 
   /* Базовые поля, общие для документов БУ УЗ 3.0. Точная схема реквизитов
      (контрагент, счета, суммы по табличным частям) дозаполняется после
@@ -584,7 +623,7 @@ module.exports = async (req, res) => {
       let body = req.body;
       if (typeof body === "string") { try { body = JSON.parse(body); } catch { body = {}; } }
       if (body && body.action === "execute_task" && body.num) {
-        return res.status(200).json(await executeTaskIn1C(Number(body.num), authUser?.name));
+        return res.status(200).json(await executeTaskIn1C(Number(body.num), authUser?.name, !!body.force));
       }
       if (body && body.action === "create_draft" && body.app && body.entity) {
         /* whitelist: entity должен быть одним из реальных типов документов БУ УЗ 3.0,
