@@ -386,6 +386,40 @@ async function contractRefFor(appPath, ownerRef, name) {
   return await redis.get("1c:ctdefault:" + appPath + ":" + ownerRef);
 }
 
+/* ---------- Обороты по счёту (регистр бухгалтерии "Хозрасчетный") ----------
+   Субконто (аналитика по контрагентам) не публикуется в этой конфигурации через
+   стандартный OData-интерфейс, поэтому точную задолженность конкретного контрагента
+   получить так нельзя — но обороты/движения по счёту за период доступны и полезны
+   (напр. "сколько прошло по счёту 5110 за июль"). */
+async function getAccountTurnover(appPath, accountCode, dateFrom, dateTo) {
+  const from = dateFrom ? `${dateFrom}T00:00:00` : null;
+  const to = dateTo ? `${dateTo}T23:59:59` : null;
+  const dateFilter = (from && to) ? ` and Period ge datetime'${from}' and Period le datetime'${to}'` : "";
+  const baseSelect = "$select=Сумма,Period,AccountDr_Key,AccountCr_Key&$top=2000&$format=json";
+
+  const drRes = await odata(appPath, "AccountingRegister_Хозрасчетный_RecordType",
+    `${baseSelect}&$filter=AccountDr/Code eq '${String(accountCode)}'${dateFilter}`);
+  const crRes = await odata(appPath, "AccountingRegister_Хозрасчетный_RecordType",
+    `${baseSelect}&$filter=AccountCr/Code eq '${String(accountCode)}'${dateFilter}`);
+
+  if (drRes.status === 404 || crRes.status === 404) {
+    return { ok: false, error: "AccountingRegister_Хозрасчетный не включён в состав OData — настройте состав REST-сервиса" };
+  }
+  if (drRes.status === 401 || crRes.status === 401) return { ok: false, error: "auth: проверьте ODATA_1C_LOGIN/PASSWORD" };
+  if (drRes.status !== 200 || crRes.status !== 200) {
+    return { ok: false, error: `HTTP ${drRes.status}/${crRes.status}` };
+  }
+
+  const debit = (drRes.json?.value || []).reduce((s, r) => s + (Number(r["Сумма"]) || 0), 0);
+  const credit = (crRes.json?.value || []).reduce((s, r) => s + (Number(r["Сумма"]) || 0), 0);
+  return {
+    ok: true, account: String(accountCode), from: dateFrom || null, to: dateTo || null,
+    debitTurnover: debit, creditTurnover: credit, net: debit - credit,
+    rowsDr: (drRes.json?.value || []).length, rowsCr: (crRes.json?.value || []).length,
+    note: "Обороты по счёту за период (без субконто по контрагентам — эта аналитика не публикуется через OData в данной конфигурации).",
+  };
+}
+
 /* тип черновика → название табличной части документа, куда кладём строки товаров/услуг */
 const TABULAR_PART_BY_TYPE = {
   realizatsiya: "Товары",
@@ -622,6 +656,11 @@ module.exports = async (req, res) => {
         if (!r.ok) return res.status(200).json(r);
         return res.status(200).json({ ok: true, count: r.contracts.length, sample: r.contracts.slice(0, 3) });
       }
+      if (q.r === "turnover" && q.app && q.account) {
+        const a = findApp(q.app);
+        if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
+        return res.status(200).json(await getAccountTurnover(a.path, q.account, q.from, q.to));
+      }
       if (q.r === "schema2" && q.app && q.entity) {
         /* временный роут: свойства произвольной сущности $metadata (Catalog_ или Document_),
            чтобы свериться перед добавлением синка контрагентов/договоров. */
@@ -662,7 +701,7 @@ module.exports = async (req, res) => {
         const props = [...m[0].matchAll(/<Property Name="([^"]+)" Type="([^"]+)"/g)].map((x) => ({ name: x[1], type: x[2] }));
         return res.status(200).json({ ok: true, props });
       }
-      return res.status(200).json({ ok: true, service: "Finpulse 1C bridge", routes: ["apps", "ping", "meta", "orgs", "counterparties", "nomenclature", "contracts"] });
+      return res.status(200).json({ ok: true, service: "Finpulse 1C bridge", routes: ["apps", "ping", "meta", "orgs", "counterparties", "nomenclature", "contracts", "turnover"] });
     }
 
     if (req.method === "POST") {
