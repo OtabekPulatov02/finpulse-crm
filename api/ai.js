@@ -182,14 +182,43 @@ async function saveChatMeta(meta) {
   /* обрезаем хвост: удаляем сообщения тем, выпавших из списка */
   for (const gone of all.slice(29)) { try { await redis.del("aichat:msgs:" + gone.id); } catch (e) { /* noop */ } }
 }
+/* Короткое название диалога (3-6 слов), генерируется ИИ по первому вопросу
+   и первому ответу — как в обычных чат-интерфейсах, вместо простого обрезания
+   сырого текста сообщения. Если вызов не удался (нет ключа, таймаут и т.п.) —
+   тихо откатываемся на старое поведение (обрезанный текст первого сообщения). */
+async function generateChatTitle(userText, replyText) {
+  const fallback = String(userText || "Диалог").slice(0, 60);
+  if (!process.env.OPENAI_API_KEY) return fallback;
+  try {
+    const res = await chat([
+      { role: "system", content: 'Придумай короткое название диалога (3-6 слов, на русском, без кавычек и точки в конце) по сути вопроса пользователя и ответа. Ответ строго JSON: {"title": "..."}.' },
+      { role: "user", content: `Вопрос: ${String(userText || "").slice(0, 500)}
+
+Ответ: ${String(replyText || "").slice(0, 500)}` },
+    ], { maxTokens: 30, timeoutMs: 8000 });
+    const title = String(res?.title || "").trim().slice(0, 60);
+    return title || fallback;
+  } catch (e) {
+    return fallback;
+  }
+}
+
 async function persistChat(chatId, messages, reply, steps) {
   const id = chatId || "ch" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
   const stored = [...messages, { role: "assistant", content: reply, steps: steps || [] }].slice(-60);
   await redis.set("aichat:msgs:" + id, stored);
   const firstUser = stored.find((m) => m.role === "user");
+  /* Название задаём только на СОЗДАНИИ диалога (по первому вопросу/ответу) —
+     при последующих сообщениях в тот же диалог название не пересчитываем,
+     чтобы оно не "прыгало" на каждый новый вопрос в чате. */
+  const isNewChat = !chatId;
+  const existing = isNewChat ? null : (await listChats()).find((c) => c.id === id);
+  const title = existing
+    ? existing.title
+    : await generateChatTitle(firstUser?.content, reply);
   await saveChatMeta({
     id,
-    title: String(firstUser?.content || "Диалог").slice(0, 60),
+    title,
     updatedAt: new Date().toISOString(),
     count: stored.length,
   });
@@ -687,6 +716,15 @@ module.exports = async (req, res) => {
         if (rest.length) await redis.rpush("aichat:threads", ...rest.map((c) => JSON.stringify(c)));
         await redis.del("aichat:msgs:" + body.id);
         return res.status(200).json({ ok: true });
+      }
+      if (body && body.action === "chat_clear_all") {
+        const isAdmin = !JWT_SECRET || (authUser && authUser.role === "admin");
+        if (!isAdmin) return res.status(403).json({ ok: false, error: "только супер-админ" });
+        const all = await listChats();
+        for (const c of all) { try { await redis.del("aichat:msgs:" + c.id); } catch (e) { /* noop */ } }
+        await redis.del("aichat:threads");
+        await logEvent("ai_chats_cleared", { count: all.length, by: actor });
+        return res.status(200).json({ ok: true, cleared: all.length });
       }
       if (body && body.action === "settings_save" && body.settings) {
         const clean = {
