@@ -769,6 +769,13 @@ module.exports = async (req, res) => {
 
     if (req.method === "GET") {
       if (q.r === "apps") return res.status(200).json({ ok: true, apps });
+      if (q.r === "docsample" && q.app && q.entity) {
+        const a = findApp(q.app);
+        if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
+        const sel = q.select ? `&$select=${q.select}` : "";
+        const r2 = await odata(a.path, q.entity, `$format=json&$top=10&$orderby=Date desc${sel}`);
+        return res.status(200).json({ ok: true, status: r2.status, sample: r2.json?.value || r2.text?.slice(0, 500) });
+      }
       if (q.r === "rawmeta" && q.app && q.entity) {
         const a = findApp(q.app);
         if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
