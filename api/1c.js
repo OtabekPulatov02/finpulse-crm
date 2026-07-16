@@ -269,6 +269,57 @@ async function counterpartyRefFor(appPath, name) {
   return await redis.get("1c:cpmap:" + appPath + ":" + norm);
 }
 
+/* ---------- Номенклатура (товары/услуги) — для строк документов ---------- */
+async function getNomenclature(appPath) {
+  const r = await odata(appPath, "Catalog_Номенклатура",
+    "$format=json&$select=Ref_Key,Description,ЕдиницаИзмерения_Key,СтавкаНДС,Услуга&$filter=DeletionMark eq false and IsFolder eq false");
+  if (r.status === 401) return { ok: false, error: "auth: проверьте ODATA_1C_LOGIN/PASSWORD" };
+  if (r.status === 404) return { ok: false, error: "Catalog_Номенклатура не включён в состав OData — настройте состав REST-сервиса" };
+  if (r.status !== 200 || !r.json) return { ok: false, error: `HTTP ${r.status}` };
+  return {
+    ok: true,
+    items: (r.json.value || []).map((n) => ({
+      ref: n.Ref_Key, name: n.Description, unit: n["ЕдиницаИзмерения_Key"] || null,
+      vat: n["СтавкаНДС"] || null, isService: !!n["Услуга"],
+    })),
+  };
+}
+
+async function syncNomenclature(appPath, appName, actor) {
+  const res = await getNomenclature(appPath);
+  if (!res.ok) return res;
+  let count = 0;
+  for (const it of res.items) {
+    const norm = normCompany(it.name);
+    if (!norm) continue;
+    await redis.set("1c:nommap:" + appPath + ":" + norm, { ref: it.ref, name: it.name, unit: it.unit, vat: it.vat });
+    count++;
+  }
+  await logEvent("1c_sync_nomenclature", { app: appName, count, by: actor || "CRM" });
+  return { ok: true, total: res.items.length, mapped: count };
+}
+
+async function nomenclatureRefFor(appPath, name) {
+  const norm = normCompany(name || "");
+  if (!norm) return null;
+  return await redis.get("1c:nommap:" + appPath + ":" + norm);
+}
+
+/* тип черновика → название табличной части документа, куда кладём строки товаров/услуг */
+const TABULAR_PART_BY_TYPE = {
+  realizatsiya: "Товары",
+  schet: "Товары",
+  postuplenie: "Товары",
+};
+
+/* сопоставление НДС-текста из черновика с реальным enum-значением 1С (строка вида "НДС12"/"БезНДС") */
+function vatEnumFromText(vat) {
+  const s = String(vat || "").toLowerCase();
+  if (s.includes("12")) return "НДС12";
+  if (s.includes("без") || s.includes("0") || s === "null") return "БезНДС";
+  return "НДС12";
+}
+
 /* Универсальное создание документа (черновик, Posted=false) */
 async function createDraftDoc(appPath, entity, fields) {
   const url = `${BASE}${appPath}/odata/standard.odata/${entity}?$format=json`;
@@ -323,6 +374,36 @@ async function executeTaskIn1C(num, actor) {
       const cp = await counterpartyRefFor(org.app, draft.counterparty);
       if (cp) fields["Контрагент_Key"] = cp.ref;
     } catch (e) { /* контрагент не критичен — документ всё равно создастся с текстом в комментарии */ }
+  }
+
+  /* строки товаров/услуг: если черновик содержит items и для этого типа документа
+     есть табличная часть "Товары" — строим реальные строки со ссылкой на номенклатуру
+     (если найдена по синку), иначе оставляем только текст в наименовании строки. */
+  const tabularPart = TABULAR_PART_BY_TYPE[draft.type];
+  if (tabularPart && Array.isArray(draft.items) && draft.items.length) {
+    const rows = [];
+    for (let i = 0; i < draft.items.length; i++) {
+      const it = draft.items[i] || {};
+      const qty = Number(it.qty) || 1;
+      const price = Number(it.price) || 0;
+      const amount = Number(it.amount) || qty * price;
+      const vatRate = vatEnumFromText(it.vat || draft.vat);
+      let nom = null;
+      try { nom = it.name ? await nomenclatureRefFor(org.app, it.name) : null; } catch (e) { /* noop */ }
+      const row = {
+        LineNumber: String(i + 1),
+        Количество: qty,
+        Цена: price,
+        Сумма: amount,
+        СтавкаНДС: vatRate,
+      };
+      if (nom) {
+        row["Номенклатура_Key"] = nom.ref;
+        if (nom.unit) row["ЕдиницаИзмерения_Key"] = nom.unit;
+      }
+      rows.push(row);
+    }
+    fields[tabularPart] = rows;
   }
 
   const r = await createDraftDoc(org.app, entity, fields);
@@ -387,6 +468,13 @@ module.exports = async (req, res) => {
         if (!r.ok) return res.status(200).json(r);
         return res.status(200).json({ ok: true, count: r.counterparties.length, sample: r.counterparties.slice(0, 3) });
       }
+      if (q.r === "nomenclature" && q.app) {
+        const a = findApp(q.app);
+        if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
+        const r = await getNomenclature(a.path);
+        if (!r.ok) return res.status(200).json(r);
+        return res.status(200).json({ ok: true, count: r.items.length, sample: r.items.slice(0, 3) });
+      }
       if (q.r === "schema2" && q.app && q.entity) {
         /* временный роут: свойства произвольной сущности $metadata (Catalog_ или Document_),
            чтобы свериться перед добавлением синка контрагентов/договоров. */
@@ -427,7 +515,7 @@ module.exports = async (req, res) => {
         const props = [...m[0].matchAll(/<Property Name="([^"]+)" Type="([^"]+)"/g)].map((x) => ({ name: x[1], type: x[2] }));
         return res.status(200).json({ ok: true, props });
       }
-      return res.status(200).json({ ok: true, service: "Finpulse 1C bridge", routes: ["apps", "ping", "meta", "orgs", "counterparties"] });
+      return res.status(200).json({ ok: true, service: "Finpulse 1C bridge", routes: ["apps", "ping", "meta", "orgs", "counterparties", "nomenclature"] });
     }
 
     if (req.method === "POST") {
@@ -460,6 +548,11 @@ module.exports = async (req, res) => {
         const a = findApp(body.app);
         if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
         return res.status(200).json(await syncCounterparties(a.path, a.name, authUser?.name));
+      }
+      if (body && body.action === "sync_nomenclature" && body.app) {
+        const a = findApp(body.app);
+        if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
+        return res.status(200).json(await syncNomenclature(a.path, a.name, authUser?.name));
       }
       return res.status(200).json({ ok: false, error: "unknown action" });
     }
