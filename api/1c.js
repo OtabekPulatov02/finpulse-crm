@@ -380,44 +380,6 @@ module.exports = async (req, res) => {
         if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
         return res.status(200).json(await getOrgs(a.path));
       }
-      if (q.r === "schema2" && q.app && q.entity) {
-        const a = findApp(q.app);
-        if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
-        const url = `${BASE}${a.path}/odata/standard.odata/$metadata`;
-        const r = await fetch(url, { headers: { Authorization: authHeader() }, signal: AbortSignal.timeout(20000) });
-        const text = await r.text();
-        if (r.status !== 200) return res.status(200).json({ ok: false, status: r.status, error: text.slice(0, 300) });
-        const re = new RegExp(`<EntityType Name="${String(q.entity)}"[\s\S]*?</EntityType>`);
-        const m = re.exec(text);
-        if (!m) return res.status(200).json({ ok: false, error: "entity not found" });
-        const props = [...m[0].matchAll(/<Property Name="([^"]+)"/g)].map((x) => x[1]);
-        const navs = [...m[0].matchAll(/<NavigationProperty Name="([^"]+)"/g)].map((x) => x[1]);
-        return res.status(200).json({ ok: true, props, navs });
-      }
-      if (q.r === "entitynames" && q.app && q.prefix) {
-        const a = findApp(q.app);
-        if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
-        const url = `${BASE}${a.path}/odata/standard.odata/$metadata`;
-        const r = await fetch(url, { headers: { Authorization: authHeader() }, signal: AbortSignal.timeout(20000) });
-        const text = await r.text();
-        if (r.status !== 200) return res.status(200).json({ ok: false, status: r.status, error: text.slice(0, 300) });
-        const re = new RegExp(`<EntityType Name="(${String(q.prefix)}[^"]*)"`, "g");
-        const names = [...text.matchAll(re)].map((x) => x[1]);
-        return res.status(200).json({ ok: true, count: names.length, names });
-      }
-      if (q.r === "complextype" && q.app && q.name) {
-        const a = findApp(q.app);
-        if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
-        const url = `${BASE}${a.path}/odata/standard.odata/$metadata`;
-        const r = await fetch(url, { headers: { Authorization: authHeader() }, signal: AbortSignal.timeout(20000) });
-        const text = await r.text();
-        if (r.status !== 200) return res.status(200).json({ ok: false, status: r.status, error: text.slice(0, 300) });
-        const re = new RegExp(`<ComplexType Name="${String(q.name)}"[\s\S]*?</ComplexType>`);
-        const m = re.exec(text);
-        if (!m) return res.status(200).json({ ok: false, error: "complextype not found" });
-        const props = [...m[0].matchAll(/<Property Name="([^"]+)" Type="([^"]+)"/g)].map((x) => ({ name: x[1], type: x[2] }));
-        return res.status(200).json({ ok: true, props });
-      }
       if (q.r === "counterparties" && q.app) {
         const a = findApp(q.app);
         if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
@@ -451,6 +413,19 @@ module.exports = async (req, res) => {
         const re = new RegExp(`<EntityType Name="(${String(q.prefix)}[^"]*)"`, "g");
         const names = [...text.matchAll(re)].map((x) => x[1]);
         return res.status(200).json({ ok: true, count: names.length, names });
+      }
+      if (q.r === "complextype" && q.app && q.name) {
+        const a = findApp(q.app);
+        if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
+        const url = `${BASE}${a.path}/odata/standard.odata/$metadata`;
+        const r = await fetch(url, { headers: { Authorization: authHeader() }, signal: AbortSignal.timeout(20000) });
+        const text = await r.text();
+        if (r.status !== 200) return res.status(200).json({ ok: false, status: r.status, error: text.slice(0, 300) });
+        const re = new RegExp(`<ComplexType Name="${String(q.name)}"[\\s\\S]*?</ComplexType>`);
+        const m = re.exec(text);
+        if (!m) return res.status(200).json({ ok: false, error: "complextype not found" });
+        const props = [...m[0].matchAll(/<Property Name="([^"]+)" Type="([^"]+)"/g)].map((x) => ({ name: x[1], type: x[2] }));
+        return res.status(200).json({ ok: true, props });
       }
       return res.status(200).json({ ok: true, service: "Finpulse 1C bridge", routes: ["apps", "ping", "meta", "orgs", "counterparties"] });
     }
