@@ -53,8 +53,9 @@ POST actions:
 - {action:"employee_create", name, phone, role:"admin|accountant"} / {action:"employee_update", id, patch} / {action:"employee_reset_password", id} / {action:"employee_delete", id}
 - {action:"calendar_event_create", type:"tax|pay", title, company?, date, repeat?, remindDays?} / _update / _delete
 onec_get: r=apps | r=ping | r=meta&app=<code> | r=orgs&app=<code>
-onec_post: {action:"sync_orgs", app} | {action:"execute_task", num} — создаёт НЕПРОВЕДЁННЫЙ документ в 1С базе клиента из AI-черновика задачи (главная операция!) | {action:"create_draft", app, entity, fields}
+onec_post: {action:"sync_orgs", app} | {action:"execute_task", num} — создаёт НЕПРОВЕДЁННЫЙ документ в 1С базе клиента из AI-черновика задачи (главная операция!)
 Пайплайн выполнения задачи клиента в 1С: 1) crm_get r=tasks — найди задачу; 2) ai_draft {num} — подготовь черновик операции; 3) onec_post {action:"execute_task", num} — создай непроведённый документ в 1С базе клиента; 4) crm_post {action:"status", num, status:"in_progress", assignee:"AI-бухгалтер"} и сообщи, что бухгалтеру осталось проверить и провести.
+ВАЖНО про 1С: НИКОГДА не вызывай onec_post {action:"create_draft", ...} напрямую и никогда не придумывай/не угадывай имена сущностей 1С (entity) сам — единственный поддерживаемый способ создать документ в 1С это пайплайн execute_task выше, который сам подставляет проверенное имя документа по типу черновика. Если нужного типа операции нет в списке поддерживаемых (платёж, ЭСФ, счёт, поступление, реализация, акт сверки, доверенность) — прямо скажи, что создание документов этого вида (например ЭДО) пока не реализовано, и не пытайся выполнить это через 1С.
 
 Правила:
 1. Всегда сначала читай данные (crm_get), потом действуй.

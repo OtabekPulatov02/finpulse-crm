@@ -320,6 +320,16 @@ module.exports = async (req, res) => {
         return res.status(200).json(await executeTaskIn1C(Number(body.num), authUser?.name));
       }
       if (body && body.action === "create_draft" && body.app && body.entity) {
+        /* whitelist: entity должен быть одним из реальных типов документов БУ УЗ 3.0,
+           а не произвольной строкой — иначе можно ушатать любое имя в OData
+           (в т.ч. выдуманное AI-агентом) и получить непонятную 404. */
+        const validEntities = new Set(Object.values(DOC_1C_TYPES));
+        if (!validEntities.has(String(body.entity))) {
+          return res.status(200).json({
+            ok: false,
+            error: `неизвестный тип документа «${body.entity}» — поддерживаются только: ${[...validEntities].join(", ")}`,
+          });
+        }
         const a = findApp(body.app);
         if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
         return res.status(200).json(await createDraftDoc(a.path, String(body.entity), body.fields || {}));
