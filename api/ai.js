@@ -63,7 +63,8 @@ onec_post: {action:"sync_orgs", app} | {action:"execute_task", num} — созд
 1. Всегда сначала читай данные (crm_get), потом действуй.
 2. Деструктивные действия (delete, сброс пароля, массовые изменения) — только после явного подтверждения в диалоге. Если его нет — опиши, что собираешься сделать, и спроси.
 3. Отвечай кратко, по-русски, с итогом что сделано. Числа/суммы — как в данных.
-4. Если данных нет или API вернул ошибку — скажи честно.`;
+4. Если данных нет или API вернул ошибку — скажи честно.
+5. Если поручение неоднозначно (неясно какую задачу/клиента/тип документа/сумму имеют в виду, или это заметно влияющее действие — создание документа в 1С, изменение статуса, удаление, массовая операция) — НЕ угадывай и НЕ выполняй сразу. Вызови ask_user с коротким вопросом и 2-4 конкретными вариантами ответа (пользователь всегда может вместо кнопки написать свой вариант текстом — это встроено в интерфейс, отдельный вариант "другое" добавлять не нужно). После ask_user сразу останавливайся и жди ответа пользователя следующим сообщением — не вызывай другие инструменты в этом же ответе.`;
 
 const AGENT_TOOLS = [
   { type: "function", function: { name: "crm_get", description: "GET-запрос к /api/crm. Аргумент query — строка после ?, напр. \"r=tasks\"", parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } } },
@@ -73,6 +74,7 @@ const AGENT_TOOLS = [
   { type: "function", function: { name: "ai_draft", description: "Сгенерировать AI-черновик операции для задачи CRM (сохраняется в task.aiDraft). Аргумент num — номер задачи.", parameters: { type: "object", properties: { num: { type: "number" } }, required: ["num"] } } },
   { type: "function", function: { name: "memory_get", description: "Долгосрочная память по компании клиента (факты).", parameters: { type: "object", properties: { company: { type: "string" } }, required: ["company"] } } },
   { type: "function", function: { name: "memory_add", description: "Записать устойчивый факт о компании в память (аренда, банк, договорённости).", parameters: { type: "object", properties: { company: { type: "string" }, fact: { type: "string" } }, required: ["company", "fact"] } } },
+  { type: "function", function: { name: "ask_user", description: "Задать уточняющий вопрос пользователю ПЕРЕД выполнением неоднозначного или значимого действия (создание документа в 1С, изменение статуса, удаление, массовая операция и т.п.). Останавливает выполнение до ответа пользователя.", parameters: { type: "object", properties: { question: { type: "string" }, options: { type: "array", items: { type: "string" }, description: "2-4 коротких конкретных варианта ответа" } }, required: ["question", "options"] } } },
 ];
 
 async function callTool(name, args, authHeaders) {
@@ -117,11 +119,16 @@ async function runAgent(messages, authHeaders) {
     if (!msg.tool_calls || !msg.tool_calls.length) {
       return { reply: msg.content || "(пустой ответ)", steps };
     }
+    let askResult = null;
     for (const tc of msg.tool_calls) {
       let args = {};
       try { args = JSON.parse(tc.function.arguments || "{}"); } catch (e) { /* noop */ }
       let result;
-      if (tc.function.name === "memory_get") {
+      if (tc.function.name === "ask_user") {
+        const options = Array.isArray(args.options) ? args.options.map(String).slice(0, 4) : [];
+        result = JSON.stringify({ ok: true, note: "вопрос показан пользователю, жду ответа" });
+        askResult = { reply: String(args.question || "Уточните, пожалуйста"), steps, askOptions: options, awaitingConfirmation: true };
+      } else if (tc.function.name === "memory_get") {
         result = JSON.stringify({ ok: true, memory: await getMemory(redis, String(args.company || "")) });
       } else if (tc.function.name === "memory_add") {
         const added = await addMemory(redis, String(args.company || ""), String(args.fact || ""), "AI-агент");
@@ -150,6 +157,7 @@ async function runAgent(messages, authHeaders) {
       steps.push({ tool: tc.function.name, args: JSON.stringify(args).slice(0, 200), ok: !result.includes('"ok":false') });
       convo.push({ role: "tool", tool_call_id: tc.id, content: result });
     }
+    if (askResult) return askResult;
   }
   return { reply: "Достигнут лимит шагов — уточните задачу или разбейте её на части.", steps };
 }
