@@ -874,6 +874,18 @@ module.exports = async (req, res) => {
         if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
         return res.status(200).json(await getAccountTurnover(a.path, q.account, q.from, q.to));
       }
+      if (q.r === "rawmeta2" && q.app && q.entity) {
+        const a = findApp(q.app);
+        if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
+        const r = await fetch(`${BASE}${a.path}/odata/standard.odata/$metadata`, {
+          headers: { Authorization: authHeader() },
+          signal: AbortSignal.timeout(20000),
+        });
+        const xml = await r.text();
+        const idx = xml.indexOf(`Name="${q.entity}"`);
+        if (idx === -1) return res.status(200).json({ ok: false, error: "not found" });
+        return res.status(200).json({ ok: true, slice: xml.slice(idx - 30, idx + 3000) });
+      }
       if (q.r === "doclog") {
         const limit = Math.min(Number(q.limit) || 50, 200);
         const rows = (await redis.lrange("1c:doclog", 0, limit - 1)) || [];
