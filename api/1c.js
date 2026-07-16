@@ -380,6 +380,13 @@ module.exports = async (req, res) => {
         if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
         return res.status(200).json(await getOrgs(a.path));
       }
+      if (q.r === "counterparties" && q.app) {
+        const a = findApp(q.app);
+        if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
+        const r = await getCounterparties(a.path);
+        if (!r.ok) return res.status(200).json(r);
+        return res.status(200).json({ ok: true, count: r.counterparties.length, sample: r.counterparties.slice(0, 3) });
+      }
       if (q.r === "schema2" && q.app && q.entity) {
         /* временный роут: свойства произвольной сущности $metadata (Catalog_ или Document_),
            чтобы свериться перед добавлением синка контрагентов/договоров. */
@@ -407,7 +414,7 @@ module.exports = async (req, res) => {
         const names = [...text.matchAll(re)].map((x) => x[1]);
         return res.status(200).json({ ok: true, count: names.length, names });
       }
-      return res.status(200).json({ ok: true, service: "Finpulse 1C bridge", routes: ["apps", "ping", "meta", "orgs"] });
+      return res.status(200).json({ ok: true, service: "Finpulse 1C bridge", routes: ["apps", "ping", "meta", "orgs", "counterparties"] });
     }
 
     if (req.method === "POST") {
