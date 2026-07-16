@@ -227,6 +227,14 @@ const COUNTERPARTY_KEY_ENTITIES = new Set([
   "Document_Доверенность",
 ]);
 
+/* кадровые документы, где нужен реальный Сотрудник_Key/ФизическоеЛицо_Key
+   (сверено с $metadata реальной базы 17.07.2026) */
+const HR_EMPLOYEE_ENTITIES = new Set([
+  "Document_Отпуск",
+  "Document_ПриемНаРаботу",
+  "Document_Увольнение",
+]);
+
 async function orgFor(company) {
   const norm = normCompany(company || "");
   if (!norm) return null;
@@ -422,6 +430,59 @@ async function contractRefFor(appPath, ownerRef, name) {
     if (exact) return exact.ref;
   }
   return await redis.get("1c:ctdefault:" + appPath + ":" + ownerRef);
+}
+
+/* ---------- Сотрудники — для кадровых документов (отпуск/приём/увольнение) ----------
+   В отличие от контрагентов, для сотрудника НИКОГДА не создаём новую карточку
+   автоматически (кадровые записи гораздо чувствительнее, ошибка дороже) — если
+   точного совпадения нет, всегда блокируем с похожими вариантами на выбор. */
+async function getEmployees(appPath) {
+  const r = await odata(appPath, "Catalog_Сотрудники",
+    "$format=json&$select=Ref_Key,Description,ФизическоеЛицо_Key,ГоловнаяОрганизация_Key&$filter=DeletionMark eq false");
+  if (r.status === 401) return { ok: false, error: "auth: проверьте ODATA_1C_LOGIN/PASSWORD" };
+  if (r.status === 404) return { ok: false, error: "Catalog_Сотрудники не включён в состав OData — настройте состав REST-сервиса" };
+  if (r.status !== 200 || !r.json) return { ok: false, error: `HTTP ${r.status}` };
+  return {
+    ok: true,
+    employees: (r.json.value || []).map((e) => ({
+      ref: e.Ref_Key, name: e.Description, individualRef: e["ФизическоеЛицо_Key"] || null, org: e["ГоловнаяОрганизация_Key"] || null,
+    })),
+  };
+}
+
+async function syncEmployees(appPath, appName, actor) {
+  const res = await getEmployees(appPath);
+  if (!res.ok) return res;
+  let count = 0;
+  const light = [];
+  for (const e of res.employees) {
+    const norm = normCompany(e.name);
+    if (!norm) continue;
+    await redis.set("1c:empmap:" + appPath + ":" + norm, { ref: e.ref, name: e.name, individualRef: e.individualRef });
+    light.push({ ref: e.ref, name: e.name, norm });
+    count++;
+  }
+  await redis.set("1c:emplist:" + appPath, light);
+  await logEvent("1c_sync_employees", { app: appName, count, by: actor || "CRM" });
+  return { ok: true, total: res.employees.length, mapped: count };
+}
+
+async function employeeRefFor(appPath, name) {
+  const norm = normCompany(name || "");
+  if (!norm) return null;
+  return await redis.get("1c:empmap:" + appPath + ":" + norm);
+}
+
+async function suggestEmployees(appPath, name, limit) {
+  const norm = normCompany(name || "");
+  if (!norm) return [];
+  const list = (await redis.get("1c:emplist:" + appPath)) || [];
+  const scored = list
+    .map((e) => ({ ...e, score: fuzzyScore(norm, e.norm) }))
+    .filter((e) => e.score >= 0.4)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit || 3);
+  return scored.map((e) => ({ ref: e.ref, name: e.name }));
 }
 
 /* ---------- Обороты по счёту (регистр бухгалтерии "Хозрасчетный") ----------
@@ -640,6 +701,7 @@ async function executeTaskIn1C(num, actor, opts) {
   const force = !!opts.force;
   const counterpartyRefOverride = opts.counterpartyRef || null;
   const confirmNewCounterparty = !!opts.confirmNewCounterparty;
+  const employeeRefOverride = opts.employeeRef || null;
   const task = await redis.get("task:" + num);
   if (!task) return { ok: false, error: "task not found" };
   const draft = task.aiDraft;
@@ -737,6 +799,53 @@ async function executeTaskIn1C(num, actor, opts) {
            продолжить без привязки контрагента), документ создаётся без Контрагент_Key */
       }
     } catch (e) { /* контрагент не критичен — документ всё равно создастся с текстом в комментарии */ }
+  }
+
+  /* кадровые документы (отпуск/приём/увольнение) — резолвим Сотрудник_Key и
+     ФизическоеЛицо_Key по синку сотрудников. В отличие от контрагентов, здесь
+     НЕТ авто-создания карточки ни при каких условиях (даже force) — кадровая
+     ошибка дороже, всегда требуем точное совпадение или явный выбор варианта. */
+  if (HR_EMPLOYEE_ENTITIES.has(entity)) {
+    if (!draft.employee) {
+      return { ok: false, error: `Для документа «${entity}» не указан сотрудник — уточните ФИО в заявке/черновике.` };
+    }
+    let emp = null;
+    if (employeeRefOverride) {
+      emp = { ref: employeeRefOverride, individualRef: null };
+    } else {
+      emp = await employeeRefFor(org.app, draft.employee);
+    }
+    if (!emp) {
+      const suggestions = await suggestEmployees(org.app, draft.employee, 3).catch(() => []);
+      return {
+        ok: false,
+        employeeAmbiguous: true,
+        suggestions,
+        error: suggestions.length
+          ? `Сотрудник «${draft.employee}» не найден точно в 1С. Похожие варианты: ${suggestions.map((s) => s.name).join(", ")}. Ответьте именем нужного варианта.`
+          : `Сотрудник «${draft.employee}» не найден в 1С, и похожих вариантов нет. Уточните точное ФИО как оно записано в 1С (карточку сотрудника ИИ не создаёт).`,
+      };
+    }
+    fields["Сотрудник_Key"] = emp.ref;
+    if (emp.individualRef) fields["ФизическоеЛицо_Key"] = emp.individualRef;
+
+    /* поля дат/длительности — по типу документа (сверено с $metadata) */
+    if (entity === "Document_Отпуск") {
+      if (draft.hrDate) {
+        fields["ДатаНачалаОсновногоОтпуска"] = draft.hrDate;
+        const days = Number(draft.hrDays) || 0;
+        if (days > 0) {
+          fields["КоличествоДнейОсновногоОтпуска"] = days;
+          const end = new Date(draft.hrDate);
+          end.setDate(end.getDate() + days - 1);
+          fields["ДатаОкончанияОсновногоОтпуска"] = end.toISOString().slice(0, 19);
+        }
+      }
+    } else if (entity === "Document_ПриемНаРаботу" && draft.hrDate) {
+      fields["ДатаПриема"] = draft.hrDate;
+    } else if (entity === "Document_Увольнение" && draft.hrDate) {
+      fields["ДатаУвольнения"] = draft.hrDate;
+    }
   }
 
   /* строки товаров/услуг: если черновик содержит items и для этого типа документа
@@ -855,6 +964,13 @@ module.exports = async (req, res) => {
         if (!r.ok) return res.status(200).json(r);
         return res.status(200).json({ ok: true, count: r.counterparties.length, sample: r.counterparties.slice(0, 3) });
       }
+      if (q.r === "employees" && q.app) {
+        const a = findApp(q.app);
+        if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
+        const r = await getEmployees(a.path);
+        if (!r.ok) return res.status(200).json(r);
+        return res.status(200).json({ ok: true, count: r.employees.length, sample: r.employees.slice(0, 3) });
+      }
       if (q.r === "nomenclature" && q.app) {
         const a = findApp(q.app);
         if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
@@ -873,19 +989,6 @@ module.exports = async (req, res) => {
         const a = findApp(q.app);
         if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
         return res.status(200).json(await getAccountTurnover(a.path, q.account, q.from, q.to));
-      }
-      if (q.r === "rawmeta2" && q.app && q.entity) {
-        const a = findApp(q.app);
-        if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
-        const r = await fetch(`${BASE}${a.path}/odata/standard.odata/$metadata`, {
-          headers: { Authorization: authHeader() },
-          signal: AbortSignal.timeout(20000),
-        });
-        const xml = await r.text();
-        const idx = xml.indexOf(`Name="${q.entity}"`);
-        if (idx === -1) return res.status(200).json({ ok: false, error: "not found" });
-        const len = Math.min(Number(q.len) || 3000, 8000);
-        return res.status(200).json({ ok: true, slice: xml.slice(idx - 30, idx + len) });
       }
       if (q.r === "doclog") {
         const limit = Math.min(Number(q.limit) || 50, 200);
@@ -911,7 +1014,7 @@ module.exports = async (req, res) => {
         items.sort((x, y) => new Date(x.nextExpectedPeriodEnd) - new Date(y.nextExpectedPeriodEnd));
         return res.status(200).json({ ok: true, items, note: "nextExpectedPeriodEnd — вывод из истории и периодичности отчёта в 1С (ближайший период после сегодняшней даты), НЕ официальный срок сдачи (1С его не хранит отдельным полем); используйте как ориентир, сверяйте с реальным сроком. periodsSkipped>0 значит в 1С давно не готовили этот отчёт — стоит проверить, не отстаёт ли синк или сама подготовка отчёта в 1С." });
       }
-      return res.status(200).json({ ok: true, service: "Finpulse 1C bridge", routes: ["apps", "ping", "meta", "orgs", "counterparties", "nomenclature", "contracts", "turnover", "doclog", "reports"] });
+      return res.status(200).json({ ok: true, service: "Finpulse 1C bridge", routes: ["apps", "ping", "meta", "orgs", "counterparties", "nomenclature", "contracts", "turnover", "doclog", "reports", "employees"] });
     }
 
     if (req.method === "POST") {
@@ -922,8 +1025,14 @@ module.exports = async (req, res) => {
           force: !!body.force,
           counterpartyRef: body.counterpartyRef || null,
           confirmNewCounterparty: !!body.confirmNewCounterparty,
+          employeeRef: body.employeeRef || null,
         };
         return res.status(200).json(await executeTaskIn1C(Number(body.num), authUser?.name, opts));
+      }
+      if (body && body.action === "sync_employees" && body.app) {
+        const a = findApp(body.app);
+        if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
+        return res.status(200).json(await syncEmployees(a.path, a.name, authUser?.name));
       }
       if (body && body.action === "create_draft" && body.app && body.entity) {
         /* whitelist: entity должен быть одним из реальных типов документов БУ УЗ 3.0,

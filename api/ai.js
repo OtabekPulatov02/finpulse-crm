@@ -58,6 +58,7 @@ onec_post: {action:"sync_orgs", app} | {action:"sync_counterparties", app} | {ac
 Пайплайн выполнения задачи клиента в 1С: 1) crm_get r=tasks — найди задачу; 2) ai_draft {num} — подготовь черновик операции; 3) onec_post {action:"execute_task", num} — создай непроведённый документ в 1С базе клиента; 4) crm_post {action:"status", num, status:"in_progress", assignee:"AI-бухгалтер"} и сообщи, что бухгалтеру осталось проверить и провести. Если execute_task вернул duplicate:true — значит по этой же компании/типу/сумме уже создан документ за последние 24ч (номер задачи указан в ответе); НЕ вызывай сразу повторно с force — сначала вызови ask_user, спроси у пользователя, это действительно отдельная операция или повтор, и только после явного подтверждения вызови execute_task снова с force:true.
 ВАЖНО про 1С: НИКОГДА не вызывай onec_post {action:"create_draft", ...} напрямую и никогда не придумывай/не угадывай имена сущностей 1С (entity) сам — единственный поддерживаемый способ создать документ в 1С это пайплайн execute_task выше, который сам подставляет проверенное имя документа по типу черновика.
 Поддерживаемые типы черновиков документов 1С (создание НЕПРОВЕДЁННОГО документа в базе клиента): платёж исходящий/входящий, ЭСФ (счёт-фактура выданный), счёт на оплату, поступление товаров/услуг, реализация товаров/услуг, акт сверки, доверенность, приём на работу, увольнение, отпуск. Все эти типы ПОДДЕРЖИВАЮТСЯ через execute_task.
+Кадровые документы (hr_leave/hr_hire/hr_fire) требуют draft.employee (точное ФИО сотрудника) — резолвится по синку сотрудников (sync_employees), сначала точное совпадение. Сотрудника НИКОГДА не создавай автоматически (в отличие от контрагента) — если execute_task вернул employeeAmbiguous:true, спроси пользователя (suggestions — похожие варианты с ref) и вызови execute_task повторно с employeeRef:<ref> при выборе, либо уточни точное ФИО. Для hr_leave также передавай draft.hrDate (дата начала отпуска) и draft.hrDays (число дней); для hr_hire/hr_fire — draft.hrDate (дата приёма/увольнения).
 НЕ путай это с самим ЭДО (Didox) — фактическая отправка документа контрагенту через систему электронного документооборота и получение подписи НЕ реализована (нет интеграции с Didox API), это отдельная задача. Если просят создать документ одного из поддерживаемых типов (в т.ч. ЭСФ) — выполняй через execute_task как обычно. Если явно просят отправить/подписать через ЭДО/Didox — скажи, что этой интеграции пока нет, и не пытайся выполнить это через 1С.
 
 Правила:
@@ -455,6 +456,47 @@ async function runAutoWork(num, extraContext, aiqInfo) {
     return await reportExecBlocked(num, task, execRes.error);
   }
 
+  /* Ответ на уточнение по СОТРУДНИКУ (кадровые документы) — сотрудника
+     никогда не создаём автоматически (в отличие от контрагента), поэтому
+     здесь только два исхода: совпадение с предложенным вариантом, либо
+     уточнённое ФИО, которое пробуем резолвить ещё раз по-настоящему. */
+  if (extraContext && aiqInfo && aiqInfo.kind === "employee" && task.aiDraft) {
+    const draft = task.aiDraft;
+    const trimmed = String(extraContext).trim();
+    const normReply = normCompanyLocal(trimmed);
+
+    let matched = null;
+    for (const s of (aiqInfo.suggestions || [])) {
+      const score = fuzzyScoreLocal(normReply, normCompanyLocal(s.name || ""));
+      if (score >= 0.5 && (!matched || score > matched.score)) matched = { ...s, score };
+    }
+
+    if (matched) {
+      const execRes = await internal1cPost({ action: "execute_task", num, employeeRef: matched.ref });
+      if (execRes.ok) return await reportExecSuccess(num, task, draft, execRes);
+      if (execRes.employeeAmbiguous) return await askClarificationInGroup(num, task, execRes.error, "employee", execRes.suggestions || []);
+      return await reportExecBlocked(num, task, execRes.error);
+    }
+
+    const rounds = Number(task.aiClarifyRounds || 0);
+    task.aiDraft = { ...draft, employee: trimmed };
+    await redis.set("task:" + num, task);
+
+    if (rounds >= 2) {
+      /* сотрудника так и не опознали за 2 уточнения — карточку не создаём
+         (в отличие от контрагента), просто честно сообщаем, что нужна ручная обработка */
+      return await reportExecBlocked(num, task, `Сотрудник так и не был однозначно опознан после ${rounds + 1} уточнений. Кадровый документ требует точного совпадения — обработайте задачу вручную.`);
+    }
+
+    task.aiClarifyRounds = rounds + 1;
+    await redis.set("task:" + num, task);
+    const execRes = await internal1cPost({ action: "execute_task", num });
+    if (execRes.ok) return await reportExecSuccess(num, task, task.aiDraft, execRes);
+    if (execRes.employeeAmbiguous) return await askClarificationInGroup(num, task, execRes.error, "employee", execRes.suggestions || []);
+    if (execRes.duplicate) return await askClarificationInGroup(num, task, execRes.error, "duplicate", []);
+    return await reportExecBlocked(num, task, execRes.error);
+  }
+
   /* Подтверждение на вопрос про возможный дубль документа — это простое да/нет,
      не про контрагента и не повод пере-спрашивать ИИ весь черновик заново. */
   if (extraContext && aiqInfo && aiqInfo.kind === "duplicate" && task.aiDraft) {
@@ -505,6 +547,9 @@ async function runAutoWork(num, extraContext, aiqInfo) {
 
   if (execRes.counterpartyAmbiguous) {
     return await askClarificationInGroup(num, task, execRes.error, execRes.noMatch ? "confirm_new" : "counterparty", execRes.suggestions || []);
+  }
+  if (execRes.employeeAmbiguous) {
+    return await askClarificationInGroup(num, task, execRes.error, "employee", execRes.suggestions || []);
   }
   if (execRes.duplicate) {
     return await askClarificationInGroup(num, task, execRes.error, "duplicate", []);
