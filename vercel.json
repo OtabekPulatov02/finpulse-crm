@@ -15,6 +15,12 @@
     },
     "api/cron/1c-sync.js": {
       "maxDuration": 60
+    },
+    "api/crm.js": {
+      "maxDuration": 60
+    },
+    "api/bot.js": {
+      "maxDuration": 60
     }
   }
 }

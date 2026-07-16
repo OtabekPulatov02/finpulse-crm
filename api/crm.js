@@ -116,6 +116,25 @@ if (JWT_SECRET && JWT_SECRET.length < 32) {
   console.warn("SECURITY: JWT_SECRET короче 32 символов — увеличьте длину секрета.");
 }
 
+/* Триггер автономного режима ИИ-бухгалтера (тумблер AI → «Автономный
+   ИИ-бухгалтер») — вызывается сразу после отправки карточки задачи в
+   группу. Сам /api/ai auto_work перепроверяет тумблер и молча выходит,
+   если автономность выключена, так что вызывать можно безусловно.
+   Ошибки не должны ломать создание задачи — поэтому best-effort. */
+const AI_API_ORIGIN = process.env.CRM_API_ORIGIN || "https://finpulse-crm.vercel.app";
+async function triggerAutoWork(num) {
+  if (!JWT_SECRET) return;
+  try {
+    const token = jwt.sign({ role: "admin", name: "CRM (авто-триггер)" }, JWT_SECRET, { algorithm: "HS256", expiresIn: "3m" });
+    await fetch(`${AI_API_ORIGIN}/api/ai`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      body: JSON.stringify({ action: "auto_work", num }),
+      signal: AbortSignal.timeout(55000),
+    });
+  } catch (e) { console.error("triggerAutoWork:", num, String(e).slice(0, 200)); }
+}
+
 function getAuthUser(req) {
   const h = req.headers.authorization || "";
   const m = /^Bearer\s+(.+)$/i.exec(h);
@@ -611,6 +630,8 @@ async function createTaskFromCrm({ clientId, company, text, assignee, dueDate, t
   } else if (!sent || !sent.ok) {
     await logEvent("crm", "group_card_failed", { num, reason: (sent && sent.description) || "unknown" });
   }
+
+  await triggerAutoWork(num);
 
   return { ok: true, task: safeTask(task) };
 }

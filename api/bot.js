@@ -38,6 +38,25 @@ const redis = new Redis({
   token: process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN,
 });
 
+/* Триггер автономного ИИ-бухгалтера сразу после создания задачи через бота —
+   зеркалит такой же вызов в api/crm.js. Сам /api/ai проверяет тублер
+   ai:settings.autoWork и молча выходит, если он выключен. */
+const AUTOWORK_API_ORIGIN = process.env.CRM_API_ORIGIN || "https://finpulse-crm.vercel.app";
+async function triggerAutoWork(num) {
+  const JWT_SECRET = process.env.JWT_SECRET || process.env.CRM_JWT_SECRET || "";
+  if (!JWT_SECRET) return;
+  try {
+    const jwt = require("jsonwebtoken");
+    const token = jwt.sign({ role: "admin", name: "Bot (авто-триггер)" }, JWT_SECRET, { algorithm: "HS256", expiresIn: "3m" });
+    await fetch(`${AUTOWORK_API_ORIGIN}/api/ai`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      body: JSON.stringify({ action: "auto_work", num }),
+      signal: AbortSignal.timeout(55000),
+    });
+  } catch (e) { console.error("triggerAutoWork:", num, String(e).slice(0, 200)); }
+}
+
 /* Расставляет пробелы-разделители тысяч в суммах внутри произвольного
    текста ("1000000" -> "1 000 000") — в тексте задач и т.п. Идемпотентно,
    поэтому применяется прямо при сохранении, а не в каждом месте показа. */
@@ -1196,6 +1215,11 @@ async function createTaskFromDraft(ctx, u, deferred) {
       await logEvent("telegram", "ai_intake_failed", { num, error: String(e).slice(0, 150) });
     }
   }
+
+  /* Автономный ИИ-бухгалтер: берёт задачу в работу сам, если тублер
+     ai:settings.autoWork включён (иначе /api/ai молча выходит).
+     await — чтобы serverless-контейнер не заморозился раньше времени. */
+  await triggerAutoWork(num);
 }
 
 /* Запрос подтверждения доверенному лицу + заявка в CRM */
