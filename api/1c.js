@@ -98,7 +98,7 @@ async function pingAll() {
 /* ---- организации приложения (после включения состава OData) ---- */
 async function getOrgs(appPath) {
   const r = await odata(appPath, "Catalog_Организации",
-    "$format=json&$select=Ref_Key,Description,НаименованиеПолное,ИНН,КодНалоговогоОргана,ОсновнойБанковскийСчет_Key,ДатаРегистрации&$filter=DeletionMark eq false");
+    "$format=json&$select=Ref_Key,Description,НаименованиеПолное,ИНН,КодНалоговогоОргана,ОсновнойБанковскийСчет_Key,ДатаРегистрации,ПИНФЛ,РегистрационныйКодПлательщикаНДС&$filter=DeletionMark eq false");
   if (r.status === 401) return { ok: false, error: "auth: проверьте ODATA_1C_LOGIN/PASSWORD (пользователь 1С в этой базе)" };
   if (r.status === 404) return { ok: false, error: "Catalog_Организации не включён в состав OData — настройте состав REST-сервиса" };
   if (r.status !== 200 || !r.json) return { ok: false, error: `HTTP ${r.status}` };
@@ -126,6 +126,8 @@ async function getOrgs(appPath) {
         bankAccount: acc ? acc["НомерСчета"] || null : null,
         mfo: bank ? bank.Code || null : null,
         bank: bank ? bank.Description || null : null,
+        pinfl: o["ПИНФЛ"] || null,
+        vatCode: o["РегистрационныйКодПлательщикаНДС"] || null,
       };
     }),
   };
@@ -154,6 +156,8 @@ async function syncOrgs(appPath, appName, actor) {
       bankAccount: org.bankAccount || null,
       mfo: org.mfo || null,
       bank: org.bank || null,
+      pinfl: org.pinfl || null,
+      vatCode: org.vatCode || null,
     };
     if (existingId) {
       const c = (await redis.get("client:" + existingId)) || {};
@@ -306,24 +310,7 @@ module.exports = async (req, res) => {
         if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
         return res.status(200).json(await getOrgs(a.path));
       }
-      if (q.r === "schema" && q.app) {
-        /* временный роут: сырой $metadata, чтобы сверить реальные имена реквизитов
-           Catalog_Организации (юр.адрес, директор, система налогообложения и т.д.)
-           перед тем как менять $select в getOrgs — угадывать имена нельзя, неверное
-           поле в $select ломает весь запрос (400) для всех баз сразу. */
-        const a = findApp(q.app);
-        if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
-        const url = `${BASE}${a.path}/odata/standard.odata/$metadata`;
-        const r = await fetch(url, { headers: { Authorization: authHeader() }, signal: AbortSignal.timeout(20000) });
-        const text = await r.text();
-        if (r.status !== 200) return res.status(200).json({ ok: false, status: r.status, error: text.slice(0, 300) });
-        const re = /<EntityType Name="Catalog_Организации"[\s\S]*?<\/EntityType>/;
-        const m = re.exec(text);
-        const chunk = m ? m[0] : text.slice(0, 4000);
-        const props = [...chunk.matchAll(/<Property Name="([^"]+)"/g)].map((x) => x[1]);
-        return res.status(200).json({ ok: true, props, raw: chunk.length < 6000 ? chunk : chunk.slice(0, 6000) });
-      }
-      return res.status(200).json({ ok: true, service: "Finpulse 1C bridge", routes: ["apps", "ping", "meta", "orgs", "schema"] });
+      return res.status(200).json({ ok: true, service: "Finpulse 1C bridge", routes: ["apps", "ping", "meta", "orgs"] });
     }
 
     if (req.method === "POST") {
