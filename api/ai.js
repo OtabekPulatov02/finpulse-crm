@@ -19,7 +19,7 @@ const redis = new Redis({
   token: process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN,
 });
 
-const DEFAULT_SETTINGS = { classify: true, drafts: true, summarize: true };
+const DEFAULT_SETTINGS = { classify: true, drafts: true, summarize: true, autoWork: false };
 
 async function logEvent(event, data) {
   try {
@@ -195,6 +195,213 @@ async function persistChat(chatId, messages, reply, steps) {
   return id;
 }
 
+/* ============================================================
+   Автономный режим («Автономный ИИ-бухгалтер», тумблер в настройках AI).
+   Срабатывает сразу после создания новой задачи (вызывается из bot.js и
+   crm.js): готовит черновик, пытается сам создать непроведённый документ
+   в 1С, отчитывается в группе бухгалтеров (реплаем на карточку задачи) и
+   в ленте задачи. Если не уверен — задаёт уточняющий вопрос реплаем в
+   группе и ждёт ответа (см. обработку в bot.js по ключу "aiq:<msgId>").
+   ============================================================ */
+
+const AUTOWORK_MONEY_TYPES = new Set(["payment_out", "payment_in", "invoice_esf", "schet", "postuplenie", "realizatsiya", "act_sverki"]);
+const ENTITY_RU_NAMES = {
+  "Document_СчетФактураВыданный": "Счёт-фактура выданный",
+  "Document_ПлатежноеПоручение": "Платёжное поручение",
+  "Document_СчетНаОплатуПокупателю": "Счёт на оплату",
+  "Document_ПоступлениеТоваровУслуг": "Поступление товаров/услуг",
+  "Document_РеализацияТоваровУслуг": "Реализация товаров/услуг",
+  "Document_ДокументРасчетовСКонтрагентом": "Акт сверки",
+  "Document_Доверенность": "Доверенность",
+  "Document_ПриемНаРаботу": "Приём на работу",
+  "Document_Увольнение": "Увольнение",
+  "Document_Отпуск": "Отпуск",
+};
+
+function normCompanyLocal(str) {
+  return String(str || "").toLowerCase().replace(/[^a-zа-яё0-9]+/gi, " ").trim();
+}
+
+function mintInternalToken() {
+  const JWT_SECRET = process.env.JWT_SECRET || process.env.CRM_JWT_SECRET || "";
+  if (!JWT_SECRET) return null;
+  const jwt = require("jsonwebtoken");
+  return jwt.sign({ role: "admin", name: "AI-бухгалтер (авто)" }, JWT_SECRET, { algorithm: "HS256", expiresIn: "3m" });
+}
+
+async function internalCrmPost(body) {
+  const token = mintInternalToken();
+  const r = await fetch(`${SELF}/api/crm`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
+      ...(process.env.CRM_API_KEY ? { "x-api-key": process.env.CRM_API_KEY } : {}),
+    },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(20000),
+  });
+  return r.json().catch(() => ({ ok: false, error: "bad json" }));
+}
+
+async function internal1cPost(body) {
+  const token = mintInternalToken();
+  const r = await fetch(`${SELF}/api/1c`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(30000),
+  });
+  return r.json().catch(() => ({ ok: false, error: "bad json" }));
+}
+
+/* Прямая отправка в Telegram-группу бухгалтеров (не через bot.js — тот же
+   токен и та же логика подхвата migrate_to_chat_id при апгрейде группы). */
+async function tgGroupSend(payload) {
+  const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+  if (!TOKEN) return null;
+  let group = await redis.get("group");
+  if (!group) return null;
+  const call = (chatId) =>
+    fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, ...payload }),
+    }).then((r) => r.json()).catch(() => null);
+  let resp = await call(Number(group));
+  if (resp && !resp.ok && resp.parameters && resp.parameters.migrate_to_chat_id) {
+    group = resp.parameters.migrate_to_chat_id;
+    await redis.set("group", group);
+    resp = await call(Number(group));
+  }
+  return resp && resp.ok ? resp.result : null;
+}
+
+function escapeHtmlLocal(s) {
+  return String(s == null ? "" : s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+}
+
+async function pushThreadEntry(num, text) {
+  try {
+    const task = await redis.get("task:" + num);
+    if (!task) return;
+    task.thread = Array.isArray(task.thread) ? task.thread : [];
+    task.thread.push({
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      at: new Date().toISOString(),
+      from: "staff",
+      by: "AI-бухгалтер",
+      text,
+      fileIndex: null,
+    });
+    if (task.thread.length > 200) task.thread = task.thread.slice(-200);
+    task.updatedAt = new Date().toISOString();
+    await redis.set("task:" + num, task);
+  } catch (e) { /* лента не критична */ }
+}
+
+async function askClarificationInGroup(num, task, questionText) {
+  const msg = await tgGroupSend({
+    text: `🤖 <b>Задача №${num}</b> — нужна ваша помощь
+
+${escapeHtmlLocal(questionText)}
+
+<i>Ответьте реплаем на это сообщение — я продолжу работу над задачей.</i>`,
+    parse_mode: "HTML",
+    ...(task.gmsg ? { reply_to_message_id: task.gmsg } : {}),
+  });
+  if (msg) {
+    try { await redis.set("aiq:" + msg.message_id, { num }, { ex: 3 * 24 * 3600 }); } catch (e) { /* noop */ }
+  }
+  await pushThreadEntry(num, `🤖 Уточняю в группе бухгалтеров: ${questionText}`);
+  await logEvent("ai_autowork_asked", { num });
+  return { ok: true, asked: true, question: questionText };
+}
+
+/* Главная функция автономного режима. extraContext — если это повторный
+   вызов после ответа бухгалтера на уточняющий вопрос (см. bot.js). */
+async function runAutoWork(num, extraContext) {
+  const settings = { ...DEFAULT_SETTINGS, ...((await redis.get("ai:settings")) || {}) };
+  if (!settings.autoWork) return { ok: true, skipped: "autoWork disabled" };
+  if (!process.env.OPENAI_API_KEY) return { ok: true, skipped: "no OPENAI_API_KEY" };
+
+  const task = await redis.get("task:" + num);
+  if (!task) return { ok: false, error: "task not found" };
+  if (task.status === "done" || task.status === "cancelled") return { ok: true, skipped: "task closed" };
+
+  let clientInfo = null;
+  try {
+    const cid = await redis.get("clientcompany:" + normCompanyLocal(task.company));
+    if (cid) clientInfo = await redis.get("client:" + cid);
+  } catch (e) { /* noop */ }
+
+  const taskForDraft = extraContext
+    ? { ...task, text: `${task.text}
+
+Уточнение бухгалтера (в ответ на вопрос ИИ): ${extraContext}` }
+    : task;
+
+  let draft;
+  try { draft = await draftFromTask(taskForDraft, clientInfo); } catch (e) { draft = null; }
+  if (!draft) {
+    await logEvent("ai_autowork_draft_failed", { num });
+    return { ok: false, error: "не удалось подготовить черновик" };
+  }
+  task.aiDraft = { ...draft, generatedAt: new Date().toISOString(), by: "AI-бухгалтер (авто)" };
+  await redis.set("task:" + num, task);
+
+  await internalCrmPost({ action: "status", num, status: "in_progress", assignee: "AI-бухгалтер" });
+
+  const lowConfidence = draft.confidence != null && Number(draft.confidence) < 0.5;
+  const missingAmount = AUTOWORK_MONEY_TYPES.has(draft.type) && !draft.amount;
+  if (draft.type === "other" || lowConfidence || missingAmount) {
+    const q = draft.notes || `Не до конца понял заявку по задаче №${num} (тип: ${draft.type}, сумма: ${draft.amount ?? "не указана"}). Что нужно сделать?`;
+    return await askClarificationInGroup(num, task, q);
+  }
+
+  const execRes = await internal1cPost({ action: "execute_task", num, force: !!extraContext });
+
+  if (execRes.ok) {
+    const entityName = ENTITY_RU_NAMES[execRes.entity] || execRes.entity;
+    const summary =
+      `✅ Задача №${num} — документ подготовлен в 1С
+
+` +
+      `📄 ${entityName}${execRes.number ? " №" + execRes.number : ""}
+` +
+      (draft.amount ? `💰 Сумма: ${Number(draft.amount).toLocaleString("ru-RU")} UZS
+` : "") +
+      (draft.counterparty ? `🤝 Контрагент: ${draft.counterparty}
+` : "") +
+      (execRes.note ? `⚠️ ${execRes.note}
+` : "") +
+      `
+👉 Осталось бухгалтеру: проверить документ в 1С и провести/отправить.`;
+    await tgGroupSend({
+      text: escapeHtmlLocal(summary),
+      ...(task.gmsg ? { reply_to_message_id: task.gmsg } : {}),
+    });
+    await pushThreadEntry(num, summary);
+    await logEvent("ai_autowork_done", { num, entity: execRes.entity, ref: execRes.ref });
+    return { ok: true, executed: true, entity: execRes.entity, ref: execRes.ref, number: execRes.number };
+  }
+
+  if (execRes.counterpartyAmbiguous || execRes.duplicate) {
+    return await askClarificationInGroup(num, task, execRes.error);
+  }
+
+  const blockedText = `⚠️ Задача №${num} — не смог выполнить автоматически: ${execRes.error || "неизвестная ошибка"}.
+
+👉 Нужна ручная обработка бухгалтером.`;
+  await tgGroupSend({
+    text: escapeHtmlLocal(blockedText),
+    ...(task.gmsg ? { reply_to_message_id: task.gmsg } : {}),
+  });
+  await pushThreadEntry(num, blockedText);
+  await logEvent("ai_autowork_blocked", { num, error: execRes.error });
+  return { ok: false, blocked: true, error: execRes.error };
+}
+
 module.exports = async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
@@ -281,6 +488,7 @@ module.exports = async (req, res) => {
           classify: body.settings.classify !== false,
           drafts: body.settings.drafts !== false,
           summarize: body.settings.summarize !== false,
+          autoWork: body.settings.autoWork === true,
         };
         await redis.set("ai:settings", clean);
         await logEvent("ai_settings_updated", { ...clean, by: actor });
@@ -310,6 +518,11 @@ module.exports = async (req, res) => {
         await redis.set("task:" + Number(body.num), task);
         await logEvent("ai_draft_created", { num: task.num, type: draft.type, by: actor });
         return res.status(200).json({ ok: true, draft: task.aiDraft });
+      }
+
+      if (body && body.action === "auto_work" && body.num) {
+        const r = await runAutoWork(Number(body.num), body.extraContext || null);
+        return res.status(200).json(r);
       }
 
       if (body && body.action === "summarize" && body.num) {
