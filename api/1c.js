@@ -306,7 +306,24 @@ module.exports = async (req, res) => {
         if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
         return res.status(200).json(await getOrgs(a.path));
       }
-      return res.status(200).json({ ok: true, service: "Finpulse 1C bridge", routes: ["apps", "ping", "meta", "orgs"] });
+      if (q.r === "schema" && q.app) {
+        /* временный роут: сырой $metadata, чтобы сверить реальные имена реквизитов
+           Catalog_Организации (юр.адрес, директор, система налогообложения и т.д.)
+           перед тем как менять $select в getOrgs — угадывать имена нельзя, неверное
+           поле в $select ломает весь запрос (400) для всех баз сразу. */
+        const a = findApp(q.app);
+        if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
+        const url = `${BASE}${a.path}/odata/standard.odata/$metadata`;
+        const r = await fetch(url, { headers: { Authorization: authHeader() }, signal: AbortSignal.timeout(20000) });
+        const text = await r.text();
+        if (r.status !== 200) return res.status(200).json({ ok: false, status: r.status, error: text.slice(0, 300) });
+        const re = /<EntityType Name="Catalog_Организации"[\s\S]*?<\/EntityType>/;
+        const m = re.exec(text);
+        const chunk = m ? m[0] : text.slice(0, 4000);
+        const props = [...chunk.matchAll(/<Property Name="([^"]+)"/g)].map((x) => x[1]);
+        return res.status(200).json({ ok: true, props, raw: chunk.length < 6000 ? chunk : chunk.slice(0, 6000) });
+      }
+      return res.status(200).json({ ok: true, service: "Finpulse 1C bridge", routes: ["apps", "ping", "meta", "orgs", "schema"] });
     }
 
     if (req.method === "POST") {
