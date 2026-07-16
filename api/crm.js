@@ -1113,17 +1113,24 @@ async function updateStatus(num, status, assignee) {
     : Promise.resolve(null);
 
   const clientPromise = (task.client && prev !== status)
-    ? redis.get("user:" + task.client)
-        .then((u) => MSG[(u && u.lang) || "ru"])
-        .then((m) => {
+    ? (async () => {
+        // "Новая задача назначена мне" — если выключено, не шлём клиенту
+        // личное сообщение именно про назначение (остальные статусы шлём как обычно).
+        if (status === "in_progress") {
+          const ns = (await redis.get("notif:settings")) || {};
+          if (ns.taskAssigned === false) return null;
+        }
+        try {
+          const u = await redis.get("user:" + task.client);
+          const m = MSG[(u && u.lang) || "ru"];
           const text =
             status === "done" ? m.done(num)
             : status === "cancelled" ? m.cancelled(num)
             : status === "in_progress" ? m.assigned(num, task.assignee || "бухгалтер")
             : m.reopened(num);
-          return tg("sendMessage", { chat_id: task.client, text });
-        })
-        .catch(() => null)
+          return await tg("sendMessage", { chat_id: task.client, text });
+        } catch (e) { return null; }
+      })()
     : Promise.resolve(null);
 
   await Promise.all([groupPromise, clientPromise]);
@@ -1311,6 +1318,12 @@ module.exports = async (req, res) => {
         const cats = (await redis.get("bot:categories")) || null;
         return res.status(200).json({ ok: true, categories: cats });
       }
+      if (q.r === "notif_settings") {
+        if (!isStaff) return res.status(403).json({ ok: false, error: "forbidden" });
+        const def = { taskAssigned: true, clientMessage: true, dueSoon: true, overdue: true, weeklyDigest: false };
+        const cur = (await redis.get("notif:settings")) || {};
+        return res.status(200).json({ ok: true, settings: { ...def, ...cur } });
+      }
       if (q.r === "tariffs") {
         return res.status(200).json({ ok: true, tariffs: await getTariffs() });
       }
@@ -1451,6 +1464,21 @@ module.exports = async (req, res) => {
          isStaff (или isAdmin для деструктивных действий). */
       if (!isStaff && !isClient && !isGuest) return res.status(403).json({ ok: false, error: "forbidden" });
 
+      if (body && body.action === "notif_settings_save" && body.settings) {
+        const isAdmin = !rolesEnforced || (authUser && authUser.role === "admin");
+        if (!isAdmin) return res.status(403).json({ ok: false, error: "admin only" });
+        const b = body.settings;
+        const clean = {
+          taskAssigned: !!b.taskAssigned,
+          clientMessage: !!b.clientMessage,
+          dueSoon: !!b.dueSoon,
+          overdue: !!b.overdue,
+          weeklyDigest: !!b.weeklyDigest,
+        };
+        await redis.set("notif:settings", clean);
+        await logEvent("crm", "notif_settings_updated", { ...clean, by: (authUser && authUser.name) || "CRM" });
+        return res.status(200).json({ ok: true, settings: clean });
+      }
       if (body && body.action === "bot_settings_save" && body.settings) {
         const isAdmin = !rolesEnforced || (authUser && authUser.role === "admin");
         if (!isAdmin) return res.status(403).json({ ok: false, error: "admin only" });

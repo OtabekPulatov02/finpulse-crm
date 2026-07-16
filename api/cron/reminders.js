@@ -133,18 +133,24 @@ async function processTaskReminders(todayStr) {
   const dueToday = open.filter((t) => t.dueDate === todayStr);
 
   let notified = 0;
+  const nsDef = { taskAssigned: true, clientMessage: true, dueSoon: true, overdue: true, weeklyDigest: false };
+  let ns = nsDef;
+  try { ns = { ...nsDef, ...((await redis.get("notif:settings")) || {}) }; } catch (e) { /* noop */ }
 
-  /* Дайджест в группу */
+  /* Дайджест в группу — секции "Просрочено"/"Срок сегодня" управляются
+     соответствующими тумблерами настроек уведомлений (Настройки → Уведомления). */
   try {
     const group = await redis.get("group");
-    if (group && (overdue.length || dueToday.length)) {
+    const showOverdue = ns.overdue !== false && overdue.length;
+    const showDueToday = ns.dueSoon !== false && dueToday.length;
+    if (group && (showOverdue || showDueToday)) {
       const line = (t) =>
         `№${t.num} · ${escapeHtml(t.company)}\nСрок: ${t.dueDate}${t.assignee ? `\nИсполнитель: ${escapeHtml(t.assignee)}` : ""}`;
       let text = `⏰ <b>Напоминания на ${todayStr}</b>`;
-      if (overdue.length) {
+      if (showOverdue) {
         text += `\n\n🔴 <b>Просрочено (${overdue.length})</b>\n\n` + overdue.map(line).join("\n\n");
       }
-      if (dueToday.length) {
+      if (showDueToday) {
         text += `\n\n🟡 <b>Срок сегодня (${dueToday.length})</b>\n\n` + dueToday.map(line).join("\n\n");
       }
       await tg("sendMessage", { chat_id: Number(group), text, parse_mode: "HTML" });
@@ -152,19 +158,46 @@ async function processTaskReminders(todayStr) {
   } catch (e) { /* карточка не критична */ }
 
   /* Личные напоминания клиентам — только по задачам со сроком сегодня,
-     не чаще раза в день на задачу */
-  for (const t of dueToday) {
-    if (!t.client) continue;
-    if (t.lastReminderDate === todayStr) continue;
-    try {
-      const u = await redis.get("user:" + t.client);
-      const lang = (u && u.lang) || "ru";
-      await tg("sendMessage", { chat_id: t.client, text: MSG[lang](t.num, t.text, t.dueDate), parse_mode: "HTML" });
-      t.lastReminderDate = todayStr;
-      await redis.set("task:" + t.num, t);
-      notified++;
-    } catch (e) { /* noop */ }
+     не чаще раза в день на задачу. Управляется тумблером "Приближается дедлайн". */
+  if (ns.dueSoon !== false) {
+    for (const t of dueToday) {
+      if (!t.client) continue;
+      if (t.lastReminderDate === todayStr) continue;
+      try {
+        const u = await redis.get("user:" + t.client);
+        const lang = (u && u.lang) || "ru";
+        await tg("sendMessage", { chat_id: t.client, text: MSG[lang](t.num, t.text, t.dueDate), parse_mode: "HTML" });
+        t.lastReminderDate = todayStr;
+        await redis.set("task:" + t.num, t);
+        notified++;
+      } catch (e) { /* noop */ }
+    }
   }
+
+  /* Еженедельная сводка — по понедельникам, если включена (Настройки →
+     Уведомления → «Еженедельная сводка»). Отправляется вместе с обычным
+     ежедневным запуском крона (см. vercel.json — крон срабатывает раз в
+     сутки), с защитой от повторной отправки в тот же понедельник. */
+  try {
+    if (ns.weeklyDigest === true) {
+      const isMonday = new Date(todayStr + "T00:00:00Z").getUTCDay() === 1;
+      const digestKey = "digest:weekly:sent:" + todayStr;
+      if (isMonday && !(await redis.get(digestKey))) {
+        const group = await redis.get("group");
+        if (group) {
+          const allRows = (await redis.mget(...keys)).filter(Boolean);
+          const byStatus = {};
+          for (const t of allRows) byStatus[t.status] = (byStatus[t.status] || 0) + 1;
+          const text =
+            `📊 <b>Еженедельная сводка · ${todayStr}</b>\n\n` +
+            `Новых: ${byStatus.new || 0}\nВ работе: ${byStatus.in_progress || 0}\nВыполнено: ${byStatus.done || 0}\n` +
+            `Отменено: ${byStatus.cancelled || 0}\n\n🔴 Просрочено сейчас: ${overdue.length}`;
+          await tg("sendMessage", { chat_id: Number(group), text, parse_mode: "HTML" });
+          await redis.set(digestKey, "1", { ex: 60 * 60 * 24 * 8 });
+        }
+      }
+    }
+  } catch (e) { /* сводка не критична */ }
 
   return { checked: open.length, overdue: overdue.length, dueToday: dueToday.length, notified };
 }

@@ -1630,12 +1630,19 @@ bot.on("message", async (ctx) => {
         }
 
         const opts = task.gmsg ? { reply_to_message_id: task.gmsg } : {};
-        const label = await sendToGroup((gid) => bot.api.sendMessage(
-          gid,
-          `💬 <b>Клиент по задаче №${task.num}</b> (${escapeHtml(task.company || "")}):`,
-          { ...opts, parse_mode: "HTML" }
-        ));
-        if (label) await redis.set(groupRouteKey(label.message_id), task.num);
+        // "Обращение клиента из Telegram" — если выключено, не шлём отдельный
+        // заголовок-уведомление "Клиент по задаче №N" (само сообщение клиента
+        // всё равно копируется в группу ниже — это нужно для ленты чата).
+        let ns = {};
+        try { ns = (await redis.get("notif:settings")) || {}; } catch (e) {}
+        if (ns.clientMessage !== false) {
+          const label = await sendToGroup((gid) => bot.api.sendMessage(
+            gid,
+            `💬 <b>Клиент по задаче №${task.num}</b> (${escapeHtml(task.company || "")}):`,
+            { ...opts, parse_mode: "HTML" }
+          ));
+          if (label) await redis.set(groupRouteKey(label.message_id), task.num);
+        }
         const copied = await sendToGroup((gid) => bot.api.copyMessage(gid, ctx.chat.id, msg.message_id));
         if (copied) await redis.set(groupRouteKey(copied.message_id), task.num);
         return ctx.reply(t.replyRouted(task.num));
