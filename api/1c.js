@@ -450,21 +450,52 @@ async function getEmployees(appPath) {
   };
 }
 
+/* Первые два слова нормализованного ФИО — обычно "Фамилия Имя" (в 1С ФИО
+   записываются именно в этом порядке). Используется, чтобы понять, есть ли
+   в базе несколько сотрудников с одинаковыми фамилией+именем, но разным
+   отчеством — тогда автоматически брать нельзя, нужно уточнение. */
+function surnameFirstNameKey(normalizedFullName) {
+  const parts = String(normalizedFullName || "").split(" ").filter(Boolean);
+  if (parts.length < 2) return null;
+  return parts[0] + " " + parts[1];
+}
+
 async function syncEmployees(appPath, appName, actor) {
   const res = await getEmployees(appPath);
   if (!res.ok) return res;
   let count = 0;
   const light = [];
+  const byKey2 = new Map();
   for (const e of res.employees) {
     const norm = normCompany(e.name);
     if (!norm) continue;
     await redis.set("1c:empmap:" + appPath + ":" + norm, { ref: e.ref, name: e.name, individualRef: e.individualRef });
     light.push({ ref: e.ref, name: e.name, norm });
+    const key2 = surnameFirstNameKey(norm);
+    if (key2) {
+      if (!byKey2.has(key2)) byKey2.set(key2, []);
+      byKey2.get(key2).push({ ref: e.ref, name: e.name, individualRef: e.individualRef });
+    }
     count++;
   }
   await redis.set("1c:emplist:" + appPath, light);
+  /* индекс "фамилия+имя" -> список сотрудников (обычно один, но не всегда) */
+  for (const [key2, list] of byKey2) {
+    await redis.set("1c:empkey2:" + appPath + ":" + key2, list);
+  }
   await logEvent("1c_sync_employees", { app: appName, count, by: actor || "CRM" });
   return { ok: true, total: res.employees.length, mapped: count };
+}
+
+/* Ищет сотрудников по фамилии+имени (без отчества). Возвращает список — если
+   в базе только один сотрудник с такими фамилией+именем, вызывающий код
+   может смело взять его без уточнения; если несколько — нужно спросить
+   отчество/полное ФИО у бухгалтера. */
+async function employeesBySurnameFirstName(appPath, name) {
+  const norm = normCompany(name || "");
+  const key2 = surnameFirstNameKey(norm);
+  if (!key2) return [];
+  return (await redis.get("1c:empkey2:" + appPath + ":" + key2)) || [];
 }
 
 async function employeeRefFor(appPath, name) {
@@ -814,6 +845,24 @@ async function executeTaskIn1C(num, actor, opts) {
       emp = { ref: employeeRefOverride, individualRef: null };
     } else {
       emp = await employeeRefFor(org.app, draft.employee);
+    }
+    if (!emp) {
+      /* Точного совпадения по полному ФИО нет — прежде чем спрашивать бухгалтера,
+         проверяем, сколько сотрудников в 1С делят те же фамилию+имя (без отчества,
+         которое в заявке часто не указывают): если такой сотрудник ровно один —
+         это явно он, берём без лишнего вопроса; если их несколько — только тогда
+         нужно отчество/полное ФИО, чтобы не перепутать людей. */
+      const byNameCandidates = await employeesBySurnameFirstName(org.app, draft.employee).catch(() => []);
+      if (byNameCandidates.length === 1) {
+        emp = byNameCandidates[0];
+      } else if (byNameCandidates.length > 1) {
+        return {
+          ok: false,
+          employeeAmbiguous: true,
+          suggestions: byNameCandidates,
+          error: `В 1С несколько сотрудников с именем и фамилией «${draft.employee}»: ${byNameCandidates.map((s) => s.name).join(", ")}. Уточните отчество (полное ФИО), чтобы не перепутать.`,
+        };
+      }
     }
     if (!emp) {
       const suggestions = await suggestEmployees(org.app, draft.employee, 3).catch(() => []);

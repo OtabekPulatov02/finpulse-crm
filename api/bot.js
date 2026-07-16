@@ -950,6 +950,25 @@ bot.command("bind", async (ctx) => {
 });
 
 /* ---------------- Выбор языка ---------------- */
+/* Кнопка-вариант под уточняющим вопросом ИИ-бухгалтера в группе (см.
+   askClarificationInGroup/buildAiqKeyboard в api/ai.js) — тот же эффект, что
+   и текстовый реплай с названием варианта, но бухгалтеру не нужно печатать. */
+bot.callbackQuery(/^aiqb:(.+)$/, async (ctx) => {
+  const token = ctx.match[1];
+  let rec = null;
+  try { rec = await redis.get("aiqb:" + token); } catch (e) {}
+  if (!rec || !rec.num) {
+    await ctx.answerCallbackQuery("Этот вопрос уже обработан или устарел.").catch(() => {});
+    return;
+  }
+  try { await redis.del("aiqb:" + token); } catch (e) {}
+  await ctx.answerCallbackQuery("Принято ✅").catch(() => {});
+  try {
+    await ctx.editMessageReplyMarkup({ reply_markup: { inline_keyboard: [] } });
+  } catch (e) { /* сообщение могло уже смениться — не критично */ }
+  await triggerAutoWork(Number(rec.num), String(rec.value || ""), { kind: rec.kind || "generic", suggestions: rec.suggestions || [] });
+});
+
 bot.callbackQuery(/^lang:(ru|uz|en)$/, async (ctx) => {
   const lang = ctx.match[1];
   const u = (await getUser(ctx.from.id)) || {};

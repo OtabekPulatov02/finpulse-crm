@@ -320,14 +320,55 @@ const NEW_COUNTERPARTY_RE = /нов(ый|ая|ого)\s*(контрагент|к
 const CONFIRM_YES_RE = /^(да|ага|верно|так|точно|yes|confirm|подтвержда)/i;
 const INN_ONLY_RE = /^\d{9}$|^\d{14}$/;
 
+/* Короткий токен для callback_data инлайн-кнопки (Telegram ограничивает
+   callback_data 64 байтами, поэтому сам вариант ответа не помещается —
+   храним его в Redis по токену и на нажатии кнопки подставляем как обычный
+   текстовый ответ в тот же конвейер runAutoWork, что и при реплае текстом). */
+function makeAiqToken() {
+  return Math.random().toString(36).slice(2, 8) + Date.now().toString(36).slice(-4);
+}
+
+async function storeAiqButton(num, kind, value, suggestions) {
+  const token = makeAiqToken();
+  try {
+    await redis.set("aiqb:" + token, { num, kind, value, suggestions: suggestions || [] }, { ex: 3 * 24 * 3600 });
+  } catch (e) { /* noop */ }
+  return token;
+}
+
+/* Строит инлайн-клавиатуру "табами" из вариантов 1С — по кнопке на вариант,
+   плюс отдельные кнопки для да/нет-подтверждений. Каждая кнопка — готовый
+   ответ, бухгалтеру не нужно печатать вручную. Если подставить нечего
+   (обычный уточняющий вопрос без вариантов) — клавиатуры не будет, ответ
+   остаётся обычным текстовым реплаем. */
+async function buildAiqKeyboard(num, kind, suggestions) {
+  const rows = [];
+  if ((kind === "counterparty" || kind === "employee") && suggestions && suggestions.length) {
+    for (const s of suggestions) {
+      const token = await storeAiqButton(num, kind, s.name, suggestions);
+      const label = String(s.name || "").slice(0, 60);
+      rows.push([{ text: label, callback_data: "aiqb:" + token }]);
+    }
+  } else if (kind === "confirm_new") {
+    const token = await storeAiqButton(num, kind, "да, новый", []);
+    rows.push([{ text: "✅ Да, это новый контрагент — создать карточку", callback_data: "aiqb:" + token }]);
+  } else if (kind === "duplicate") {
+    const token = await storeAiqButton(num, kind, "да", []);
+    rows.push([{ text: "✅ Да, всё равно продолжить", callback_data: "aiqb:" + token }]);
+  }
+  return rows.length ? { inline_keyboard: rows } : undefined;
+}
+
 async function askClarificationInGroup(num, task, questionText, kind, suggestions) {
+  const replyMarkup = await buildAiqKeyboard(num, kind, suggestions).catch(() => undefined);
   const msg = await tgGroupSend({
     text: `🤖 <b>Задача №${num}</b> — нужна ваша помощь
 
 ${escapeHtmlLocal(questionText)}
 
-<i>Ответьте реплаем на это сообщение — я продолжу работу над задачей.</i>`,
+<i>Нажмите кнопку с нужным вариантом ниже, или ответьте реплаем на это сообщение своим текстом — я продолжу работу над задачей.</i>`,
     parse_mode: "HTML",
+    ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
     ...(task.gmsg ? { reply_to_message_id: task.gmsg } : {}),
   });
   if (msg) {
