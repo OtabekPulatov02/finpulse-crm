@@ -380,6 +380,13 @@ module.exports = async (req, res) => {
         if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
         return res.status(200).json(await getOrgs(a.path));
       }
+      if (q.r === "doc" && q.app && q.entity && q.ref) {
+        /* временный роут: проверить один документ по Ref_Key, посмотреть проставленные поля (в т.ч. Контрагент_Key) */
+        const a = findApp(q.app);
+        if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
+        const r = await odata(a.path, `${String(q.entity)}(guid'${String(q.ref)}')`, "$format=json");
+        return res.status(200).json({ ok: r.status === 200, status: r.status, doc: r.json || null });
+      }
       if (q.r === "counterparties" && q.app) {
         const a = findApp(q.app);
         if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
