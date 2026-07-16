@@ -310,6 +310,19 @@ module.exports = async (req, res) => {
         if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
         return res.status(200).json(await getOrgs(a.path));
       }
+      if (q.r === "docnames" && q.app) {
+        /* временный роут: список всех Document_* сущностей в $metadata базы,
+           чтобы найти реальное имя для «кадрового приказа» и свериться со
+           списком поддерживаемых типов документов перед расширением DOC_1C_TYPES. */
+        const a = findApp(q.app);
+        if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
+        const url = `${BASE}${a.path}/odata/standard.odata/$metadata`;
+        const r = await fetch(url, { headers: { Authorization: authHeader() }, signal: AbortSignal.timeout(20000) });
+        const text = await r.text();
+        if (r.status !== 200) return res.status(200).json({ ok: false, status: r.status, error: text.slice(0, 300) });
+        const names = [...text.matchAll(/<EntityType Name="(Document_[^"]+)"/g)].map((x) => x[1]);
+        return res.status(200).json({ ok: true, count: names.length, names });
+      }
       return res.status(200).json({ ok: true, service: "Finpulse 1C bridge", routes: ["apps", "ping", "meta", "orgs"] });
     }
 
