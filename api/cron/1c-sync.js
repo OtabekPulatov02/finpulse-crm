@@ -93,16 +93,28 @@ module.exports = async (req, res) => {
     const ready = apps.filter((a) => a.ready);
     const results = [];
 
+    /* ?mode=light — облегчённый прогон для почасового триггера (GitHub
+       Actions, см. .github/workflows/hourly-1c-sync.yml — Vercel Hobby
+       cron не умеет чаще раза в сутки). Синкает только организации и
+       контрагентов — самое "летучее" и нужное для актуальности CRM в
+       течение дня. Полный прогон (номенклатура/договоры/кадры) остаётся
+       только ночным: у баз Clobus жёсткий лимит одновременных сеансов
+       (сами в этом убедились на PRESTIGE CLUB), гонять все 8 типов по
+       всем базам каждый час — верный способ упереться в этот лимit. */
+    const light = req.query && req.query.mode === "light";
+
     for (const a of ready) {
       const row = { code: a.code, name: a.name };
       row.orgs = await callApi1c(token, { action: "sync_orgs", app: a.code });
       row.counterparties = await callApi1c(token, { action: "sync_counterparties", app: a.code });
-      row.contracts = await callApi1c(token, { action: "sync_contracts", app: a.code });
-      row.nomenclature = await callApi1c(token, { action: "sync_nomenclature", app: a.code });
-      row.reports = await callApi1c(token, { action: "sync_reports", app: a.code });
-      row.employees = await callApi1c(token, { action: "sync_employees", app: a.code });
-      row.positions = await callApi1c(token, { action: "sync_positions", app: a.code });
-      row.departments = await callApi1c(token, { action: "sync_departments", app: a.code });
+      if (!light) {
+        row.contracts = await callApi1c(token, { action: "sync_contracts", app: a.code });
+        row.nomenclature = await callApi1c(token, { action: "sync_nomenclature", app: a.code });
+        row.reports = await callApi1c(token, { action: "sync_reports", app: a.code });
+        row.employees = await callApi1c(token, { action: "sync_employees", app: a.code });
+        row.positions = await callApi1c(token, { action: "sync_positions", app: a.code });
+        row.departments = await callApi1c(token, { action: "sync_departments", app: a.code });
+      }
       results.push(row);
     }
 
@@ -110,18 +122,21 @@ module.exports = async (req, res) => {
        Vercel-логи или замечал устаревшие данные в 1С-разделе. Теперь если
        хотя бы одна база не смогла синкнуть ни один тип сущностей — шлём
        алерт в группу бухгалтеров с перечнем проблемных баз. */
-    const KEYS = ["orgs", "counterparties", "contracts", "nomenclature", "reports", "employees", "positions", "departments"];
+    const KEYS = light
+      ? ["orgs", "counterparties"]
+      : ["orgs", "counterparties", "contracts", "nomenclature", "reports", "employees", "positions", "departments"];
     const brokenBases = results
       .filter((row) => KEYS.every((k) => row[k] && row[k].ok === false))
       .map((row) => `${row.name}: ${row.orgs && row.orgs.error ? row.orgs.error : "неизвестная ошибка"}`);
     if (brokenBases.length) {
+      const label = light ? "Часовой синк 1С" : "Ночной синк 1С";
       await tgToGroup({
-        text: `⚠️ <b>Ночной синк 1С не смог обновить ни один справочник</b> в ${brokenBases.length} из ${ready.length} баз:\n${brokenBases.map((b) => "• " + b).join("\n")}\n\nПроверьте логи Vercel (cron/1c-sync) и доступ к базе в Clobus.`,
+        text: `⚠️ <b>${label} не смог обновить ни один справочник</b> в ${brokenBases.length} из ${ready.length} баз:\n${brokenBases.map((b) => "• " + b).join("\n")}\n\nПроверьте логи Vercel (cron/1c-sync) и доступ к базе в Clobus.`,
         parse_mode: "HTML",
       }).catch(() => null);
     }
 
-    return res.status(200).json({ ok: true, total: apps.length, synced: ready.length, results });
+    return res.status(200).json({ ok: true, mode: light ? "light" : "full", total: apps.length, synced: ready.length, results });
   } catch (e) {
     console.error("1c-sync cron:", e);
     await tgToGroup({

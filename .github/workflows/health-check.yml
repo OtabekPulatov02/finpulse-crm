@@ -1,0 +1,25 @@
+name: Health check (every 5 min)
+
+# Vercel Hobby plan crons can only run once/day, so 5-minute monitoring
+# lives here instead — a plain HTTP GET to /api/ops?r=health. The endpoint
+# itself decides whether to alert Telegram (only on status change), this
+# workflow just needs to fire reliably and fail loudly if it can't even
+# reach Vercel.
+#
+# Needs one repo secret: CRON_SECRET — same value as the CRON_SECRET env
+# var already set in Vercel (Settings → Environment Variables).
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call /api/ops?r=health
+        run: |
+          curl -sS -f -m 20 \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "https://finpulse-crm.vercel.app/api/ops?r=health"

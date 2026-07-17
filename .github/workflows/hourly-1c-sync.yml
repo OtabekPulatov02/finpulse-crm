@@ -1,0 +1,25 @@
+name: Hourly 1C sync (light)
+
+# Vercel Hobby cron only runs once/day (see api/cron/1c-sync.js for the
+# full nightly sync). This runs the lightweight ?mode=light pass hourly —
+# organizations + counterparties only, so the CRM doesn't go stale for a
+# full day and the AI has fresher counterparty data mid-day, without
+# hammering Clobus's per-app concurrent session limit with the full
+# 8-entity sync every hour.
+#
+# Needs one repo secret: CRON_SECRET — same value as in Vercel.
+
+on:
+  schedule:
+    - cron: "15 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call /api/cron/1c-sync?mode=light
+        run: |
+          curl -sS -f -m 120 \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "https://finpulse-crm.vercel.app/api/cron/1c-sync?mode=light"

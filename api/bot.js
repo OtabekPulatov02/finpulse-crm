@@ -1020,6 +1020,38 @@ bot.callbackQuery(/^aiqb:(.+)$/, async (ctx) => {
   await triggerAutoWork(Number(rec.num), String(rec.value || ""), { kind: rec.kind || "generic", suggestions: rec.suggestions || [] });
 });
 
+/* Оценка качества AI-подсказки (👍/👎) под сообщением reportExecSuccess
+   в api/ai.js — копим датасет для тюнинга промптов и решения, когда
+   включать автопроведение без участия бухгалтера. Один голос на
+   сообщение (кнопки убираются после первого клика), голосующий и время
+   сохраняются вместе с оценкой. */
+bot.callbackQuery(/^fb:(up|down):(\d+)$/, async (ctx) => {
+  const rating = ctx.match[1];
+  const num = Number(ctx.match[2]);
+  const month = new Date().toISOString().slice(0, 7);
+  try {
+    await redis.rpush("ai:feedback:" + month, JSON.stringify({
+      num,
+      rating,
+      by: ctx.from?.username || ctx.from?.first_name || String(ctx.from?.id || ""),
+      ts: new Date().toISOString(),
+    }));
+    await redis.expire("ai:feedback:" + month, 60 * 60 * 24 * 400);
+    await redis.incrby(`ai:feedback:${month}:${rating}`, 1);
+    await redis.expire(`ai:feedback:${month}:${rating}`, 60 * 60 * 24 * 400);
+  } catch (e) { /* noop */ }
+  await ctx.answerCallbackQuery(rating === "up" ? "Спасибо! 👍" : "Записал, разберёмся 👎").catch(() => {});
+  try {
+    await ctx.editMessageReplyMarkup({
+      reply_markup: { inline_keyboard: [[{ text: rating === "up" ? "👍 Оценено" : "👎 Оценено", callback_data: "fb:noop" }]] },
+    });
+  } catch (e) { /* сообщение могло уже смениться — не критично */ }
+});
+
+bot.callbackQuery("fb:noop", async (ctx) => {
+  await ctx.answerCallbackQuery().catch(() => {});
+});
+
 bot.callbackQuery(/^lang:(ru|uz|en)$/, async (ctx) => {
   const lang = ctx.match[1];
   const u = (await getUser(ctx.from.id)) || {};

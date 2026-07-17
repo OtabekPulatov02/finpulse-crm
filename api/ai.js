@@ -11,7 +11,7 @@
 
 const { Redis } = require("@upstash/redis");
 const { chat, classifyTask, draftFromTask, summarizeThread } = require("../lib/ai.js");
-const { buildClientContext, getMemory, addMemory, getUsage, logUsage } = require("../lib/brain.js");
+const { buildClientContext, getMemory, addMemory, getUsage, logUsage, getMonthlyCostUsd } = require("../lib/brain.js");
 const { CONSTITUTION, DEFAULT_CATEGORIES } = require("../lib/knowledge.js");
 
 const redis = new Redis({
@@ -108,9 +108,52 @@ async function callTool(name, args, authHeaders) {
   }
 }
 
+/* Двухуровневый выбор модели: по умолчанию — дешёвая gpt-4o-mini (рутина:
+   классификация, обычные черновики, короткие ответы). На сильную модель
+   (OPENAI_MODEL_STRONG, по умолчанию gpt-4o) переключаемся только когда в
+   диалоге явно видны признаки сложного разбора — требования ГНИ, споры по
+   договору, апелляции/жалобы и т.п., где цена ошибки высокая, а не когда
+   "текст длинный". Эвристика по ключевым словам — простая и предсказуемая,
+   в отличие от эвристики "спроси модель, сложный ли это случай" (это стоило
+   бы ещё один вызов API). */
+const COMPLEX_TASK_KEYWORDS = [
+  "требование гни", "требование гнс", "налоговая проверка", "выездная проверка",
+  "камеральная проверка", "акт проверки", "штраф", "пеня", "судебн", "претензия",
+  "апелляц", "жалоба", "спор по договору", "расторжение договора", "иск",
+];
+
+function pickModel(messages) {
+  const strong = process.env.OPENAI_MODEL_STRONG || "gpt-4o";
+  const cheap = process.env.OPENAI_MODEL || "gpt-4o-mini";
+  const lastUserMsgs = (messages || []).filter((m) => m.role === "user").slice(-3);
+  const text = lastUserMsgs.map((m) => (typeof m.content === "string" ? m.content : "")).join(" ").toLowerCase();
+  const isComplex = COMPLEX_TASK_KEYWORDS.some((kw) => text.includes(kw));
+  return isComplex ? strong : cheap;
+}
+
+/* Месячный бюджет на AI (env AI_MONTHLY_BUDGET_USD, необязательный) —
+   при превышении шлём алерт в группу ОДИН раз за месяц (дедуп через
+   Redis-флаг), чтобы не спамить на каждом вызове. */
+async function checkBudget() {
+  const budget = Number(process.env.AI_MONTHLY_BUDGET_USD || 0);
+  if (!budget) return;
+  try {
+    const month = new Date().toISOString().slice(0, 7);
+    const spent = await getMonthlyCostUsd(redis, month);
+    if (spent < budget) return;
+    const alertKey = `ai:budget:alerted:${month}`;
+    if (await redis.get(alertKey)) return;
+    await redis.set(alertKey, "1", { ex: 60 * 60 * 24 * 32 });
+    await tgGroupSend({
+      text: `⚠️ <b>AI-бюджет за ${month} превышен</b>\n\nПотрачено ≈$${spent.toFixed(2)} при лимите $${budget}. Это оценка по токенам, не биллинг OpenAI напрямую — сверьте с dashboard.openai.com/usage.`,
+      parse_mode: "HTML",
+    });
+  } catch (e) { /* noop */ }
+}
+
 async function runAgent(messages, authHeaders) {
   const KEY = process.env.OPENAI_API_KEY;
-  const MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
+  const MODEL = pickModel(messages);
   const convo = [{ role: "system", content: AGENT_SYSTEM }, ...messages.slice(-20)];
   const steps = [];
   for (let i = 0; i < 8; i++) {
@@ -122,7 +165,8 @@ async function runAgent(messages, authHeaders) {
     });
     if (!r.ok) throw new Error(`OpenAI HTTP ${r.status}: ${(await r.text()).slice(0, 200)}`);
     const data = await r.json();
-    void logUsage(redis, data.usage);
+    void logUsage(redis, data.usage, MODEL);
+    void checkBudget();
     const msg = data.choices?.[0]?.message;
     if (!msg) throw new Error("empty completion");
     convo.push(msg);
@@ -431,6 +475,12 @@ async function reportExecSuccess(num, task, draft, execRes) {
   await tgGroupSend({
     text: escapeHtmlLocal(summary),
     ...(task.gmsg ? { reply_to_message_id: task.gmsg } : {}),
+    reply_markup: {
+      inline_keyboard: [[
+        { text: "👍 Полезно", callback_data: `fb:up:${num}` },
+        { text: "👎 Не то", callback_data: `fb:down:${num}` },
+      ]],
+    },
   });
   await pushThreadEntry(num, summary);
   await logEvent("ai_autowork_done", { num, entity: execRes.entity, ref: execRes.ref });
@@ -677,6 +727,14 @@ module.exports = async (req, res) => {
       }
       if (q.r === "usage") {
         return res.status(200).json({ ok: true, usage: await getUsage(redis, Number(q.days) || 7) });
+      }
+      if (q.r === "ai_feedback") {
+        const month = q.month || new Date().toISOString().slice(0, 7);
+        const [up, down] = await Promise.all([
+          redis.get(`ai:feedback:${month}:up`),
+          redis.get(`ai:feedback:${month}:down`),
+        ]);
+        return res.status(200).json({ ok: true, month, up: Number(up || 0), down: Number(down || 0) });
       }
       if (q.r === "settings") {
         const cur = (await redis.get("ai:settings")) || {};

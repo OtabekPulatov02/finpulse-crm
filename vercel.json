@@ -7,6 +7,10 @@
     {
       "path": "/api/cron/1c-sync",
       "schedule": "0 2 * * *"
+    },
+    {
+      "path": "/api/cron/backup",
+      "schedule": "0 4 * * *"
     }
   ],
   "functions": {
@@ -20,6 +24,9 @@
       "maxDuration": 60
     },
     "api/bot.js": {
+      "maxDuration": 60
+    },
+    "api/cron/backup.js": {
       "maxDuration": 60
     }
   }

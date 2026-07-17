@@ -24,6 +24,8 @@ const redis = new Redis({
   token: process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN,
 });
 
+const { fetchWithRetry } = require("../lib/httpRetry.js");
+
 const BASE = process.env.ODATA_1C_BASE || "https://clobus.uz";
 const LOGIN = process.env.ODATA_1C_LOGIN || "";
 const PASSWORD = process.env.ODATA_1C_PASSWORD || "";
@@ -57,10 +59,11 @@ function authHeader() {
 
 async function odata(appPath, resource, params) {
   const url = `${BASE}${appPath}/odata/standard.odata/${resource}${params ? `?${params}` : ""}`;
-  const r = await fetch(url, {
+  // GET-запросы идемпотентны — безопасно повторить при сетевом сбое/таймауте
+  const r = await fetchWithRetry(() => fetch(url, {
     headers: { Authorization: authHeader(), Accept: "application/json" },
     signal: AbortSignal.timeout(20000),
-  });
+  }));
   const text = await r.text();
   let json = null;
   try { json = JSON.parse(text); } catch (e) { /* xml или html */ }
@@ -767,12 +770,15 @@ function applyAmountFields(fields, draftType, amount, vatText) {
 async function createDraftDoc(appPath, entity, fields) {
   const url = `${BASE}${appPath}/odata/standard.odata/${entity}?$format=json`;
   const payload = { ...fields, Posted: false };
-  const r = await fetch(url, {
+  // ретраим ТОЛЬКО сетевой сбой до получения ответа (timeout/ECONNRESET) —
+  // если 1С уже ответила (даже ошибкой), запрос дошёл и повтор рискует
+  // создать документ дважды, поэтому здесь не ретраим на HTTP-уровне
+  const r = await fetchWithRetry(() => fetch(url, {
     method: "POST",
     headers: { Authorization: authHeader(), Accept: "application/json", "Content-Type": "application/json" },
     body: JSON.stringify(payload),
     signal: AbortSignal.timeout(25000),
-  });
+  }), { retries: 2, baseDelayMs: 800 });
   const text = await r.text();
   let json = null;
   try { json = JSON.parse(text); } catch (e) { /* noop */ }
