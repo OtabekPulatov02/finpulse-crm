@@ -1395,6 +1395,7 @@ module.exports = async (req, res) => {
           taxCategories: ["Оплата НДС", "Аванс по УСН", "НДФЛ и соцвзносы", "Отчёт в статистику"],
           reminderIntervals: ["В день события", "За 1 день", "За 3 дня", "За неделю"],
           repeatPeriods: ["Однократно", "Ежедневно", "Ежемесячно", "Ежеквартально", "Ежегодно"],
+          reminderTypeLabels: { tax: "Налог / отчёт", pay: "Платёж фирмы" },
         };
         const cur = (await redis.get("dicts:custom")) || {};
         return res.status(200).json({ ok: true, dicts: { ...def, ...cur } });
@@ -1621,12 +1622,17 @@ module.exports = async (req, res) => {
         const d = body.dicts;
         const cleanList = (arr, max) =>
           Array.isArray(arr) ? arr.map((x) => String(x).trim().slice(0, 60)).filter(Boolean).slice(0, max) : [];
+        const cleanLabel = (v, fallback) => (v && String(v).trim() ? String(v).trim().slice(0, 40) : fallback);
         const clean = {
           calendarEventTypes: cleanList(d.calendarEventTypes, 20),
           paymentCategories: cleanList(d.paymentCategories, 30),
           taxCategories: cleanList(d.taxCategories, 30),
           reminderIntervals: cleanList(d.reminderIntervals, 15),
           repeatPeriods: cleanList(d.repeatPeriods, 10),
+          reminderTypeLabels: {
+            tax: cleanLabel(d.reminderTypeLabels && d.reminderTypeLabels.tax, "Налог / отчёт"),
+            pay: cleanLabel(d.reminderTypeLabels && d.reminderTypeLabels.pay, "Платёж фирмы"),
+          },
         };
         await redis.set("dicts:custom", clean);
         await logEvent("crm", "dicts_updated", { by: (authUser && authUser.name) || "CRM" });
