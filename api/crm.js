@@ -43,6 +43,7 @@
 
 const { Redis } = require("@upstash/redis");
 const { DEFAULT_CATEGORIES } = require("../lib/knowledge.js");
+const { computeAssignPatch, getAssignRules, saveAssignRules } = require("../lib/assign.js");
 const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
 
@@ -220,7 +221,12 @@ async function logEvent(source, event, data) {
   try {
     await redis.lpush("logs:" + source, JSON.stringify({ ts: new Date().toISOString(), event, ...data }));
     await redis.ltrim("logs:" + source, 0, 499);
-  } catch (e) { /* noop */ }
+  } catch (e) {
+    const _archMonth = new Date().toISOString().slice(0, 7);
+    redis.lpush("logs:archive:" + source + ":" + _archMonth, JSON.stringify({ ts: new Date().toISOString(), event, ...data }))
+      .then(() => redis.ltrim("logs:archive:" + source + ":" + _archMonth, 0, 9999))
+      .then(() => redis.expire("logs:archive:" + source + ":" + _archMonth, 60 * 60 * 24 * 420))
+      .catch(() => {}); /* noop */ }
 }
 
 function safeTask(t) {
@@ -595,6 +601,19 @@ async function createTaskFromCrm({ clientId, company, text, assignee, dueDate, t
     dueDate: cleanDue,
     type: taskType,
   };
+
+  /* Автораспределение по правилам (Настройки → Распределение / Справочники)
+     — только если задачу ещё явно никому не назначили выше. */
+  if (taskType !== "reminder") {
+    const assignPatch = await computeAssignPatch(redis, { text: cleanText, source: "crm", alreadyAssigned: !!assignee });
+    if (assignPatch.assignee) {
+      task.assignee = assignPatch.assignee;
+      task.status = "in_progress";
+      if (assignPatch.priority) task.priority = assignPatch.priority;
+      if (assignPatch.dueDate && !task.dueDate) task.dueDate = assignPatch.dueDate;
+    }
+  }
+
   await redis.set("task:" + num, task);
   if (cleanDue) await redis.sadd("tasks:withdue", num);
   if (telegramId) {
@@ -1327,6 +1346,17 @@ module.exports = async (req, res) => {
         const logs = rows.map((r) => { try { return typeof r === "string" ? JSON.parse(r) : r; } catch { return null; } }).filter(Boolean);
         return res.status(200).json({ ok: true, src, logs });
       }
+      if (q.r === "logs_archive") {
+        /* Помесячный архив (см. logEvent) — глубже, чем последние 500
+           живых записей. Месяц по умолчанию — текущий, можно указать
+           month=YYYY-MM для более старых периодов. */
+        if (!isStaff) return res.status(403).json({ ok: false, error: "forbidden" });
+        const src = q.src === "crm" ? "crm" : "telegram";
+        const month = /^\d{4}-\d{2}$/.test(String(q.month || "")) ? q.month : new Date().toISOString().slice(0, 7);
+        const rows = (await redis.lrange("logs:archive:" + src + ":" + month, 0, 9999)) || [];
+        const logs = rows.map((r) => { try { return typeof r === "string" ? JSON.parse(r) : r; } catch { return null; } }).filter(Boolean);
+        return res.status(200).json({ ok: true, src, month, count: logs.length, logs });
+      }
       if (q.r === "bot_settings") {
         if (!isStaff) return res.status(403).json({ ok: false, error: "forbidden" });
         const def = { slaHours: 3, workStart: 9, workEnd: 16, tzOffset: 5 };
@@ -1353,11 +1383,16 @@ module.exports = async (req, res) => {
       if (q.r === "tariffs") {
         return res.status(200).json({ ok: true, tariffs: await getTariffs() });
       }
+      if (q.r === "assign_rules") {
+        if (!isStaff) return res.status(403).json({ ok: false, error: "forbidden" });
+        return res.status(200).json({ ok: true, rules: await getAssignRules(redis) });
+      }
       if (q.r === "dicts") {
         if (!isStaff) return res.status(403).json({ ok: false, error: "forbidden" });
         const def = {
           calendarEventTypes: ["Налоги и отчёты", "Платежи фирм", "Задачи"],
           paymentCategories: ["Аренда", "Интернет и связь", "Коммунальные услуги", "Лизинг", "Страховка"],
+          taxCategories: ["Оплата НДС", "Аванс по УСН", "НДФЛ и соцвзносы", "Отчёт в статистику"],
           reminderIntervals: ["В день события", "За 1 день", "За 3 дня", "За неделю"],
           repeatPeriods: ["Однократно", "Ежедневно", "Ежемесячно", "Ежеквартально", "Ежегодно"],
         };
@@ -1481,7 +1516,7 @@ module.exports = async (req, res) => {
         }
         return res.status(200).json({ ok: true, events });
       }
-      return res.status(200).json({ ok: true, service: "Finpulse CRM API", routes: ["ping", "tasks", "logs", "pending", "clients", "client", "calendar", "calendar_events", "employees", "tariffs", "dicts", "notif_settings", "bot_settings", "bot_categories", "bot_positions"] });
+      return res.status(200).json({ ok: true, service: "Finpulse CRM API", routes: ["ping", "tasks", "logs", "pending", "clients", "client", "calendar", "calendar_events", "employees", "tariffs", "dicts", "notif_settings", "bot_settings", "bot_categories", "bot_positions", "assign_rules"] });
     }
 
     if (req.method === "POST") {
@@ -1573,6 +1608,13 @@ module.exports = async (req, res) => {
         await logEvent("crm", "tariffs_updated", { count: clean.length, by: (authUser && authUser.name) || "CRM" });
         return res.status(200).json({ ok: true, tariffs: clean });
       }
+      if (body && body.action === "assign_rules_save" && Array.isArray(body.rules)) {
+        const isAdmin = !rolesEnforced || (authUser && authUser.role === "admin");
+        if (!isAdmin) return res.status(403).json({ ok: false, error: "admin only" });
+        const clean = await saveAssignRules(redis, body.rules);
+        await logEvent("crm", "assign_rules_updated", { count: clean.length, by: (authUser && authUser.name) || "CRM" });
+        return res.status(200).json({ ok: true, rules: clean });
+      }
       if (body && body.action === "dicts_save" && body.dicts) {
         const isAdmin = !rolesEnforced || (authUser && authUser.role === "admin");
         if (!isAdmin) return res.status(403).json({ ok: false, error: "admin only" });
@@ -1582,6 +1624,7 @@ module.exports = async (req, res) => {
         const clean = {
           calendarEventTypes: cleanList(d.calendarEventTypes, 20),
           paymentCategories: cleanList(d.paymentCategories, 30),
+          taxCategories: cleanList(d.taxCategories, 30),
           reminderIntervals: cleanList(d.reminderIntervals, 15),
           repeatPeriods: cleanList(d.repeatPeriods, 10),
         };

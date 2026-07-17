@@ -62,17 +62,7 @@ async function triggerAutoWork(num, extraContext, aiqInfo) {
    ИИ показывался бы в группе с буквальными звёздочками — тот же пробел,
    что раньше был в AI-чате CRM, но применительно к Telegram. Экранируем
    HTML-спецсимволы ДО разбора markdown-разметки, чтобы не сломать теги. */
-function mdToTelegramHtml(text) {
-  const lines = String(text ?? "").split("\n");
-  return lines.map((line) => {
-    const trimmed = line.trimStart();
-    const isBullet = /^[-*]\s+/.test(trimmed);
-    const content = isBullet ? trimmed.replace(/^[-*]\s+/, "") : line;
-    let escaped = escapeHtml(content);
-    escaped = escaped.replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/`(.+?)`/g, "<code>$1</code>");
-    return (isBullet ? "• " : "") + escaped;
-  }).join("\n");
-}
+const { mdToTelegramHtml } = require("../lib/markdown.js");
 
 /* Прямое обращение к ИИ-агенту в группе бухгалтеров (/ask или упоминание
    бота) — тот же агент с доступом к CRM/1С, что и AI-чат в CRM; диалог
@@ -550,6 +540,7 @@ function slaDeadline(set) {
 
 /* ---------------- Категории услуг (редактируются в CRM) ---------------- */
 const { DEFAULT_CATEGORIES } = require("../lib/knowledge.js");
+const { computeAssignPatch } = require("../lib/assign.js");
 async function getCategories() {
   try {
     const c = await redis.get("bot:categories");
@@ -794,7 +785,12 @@ async function logEvent(source, event, data) {
   try {
     await redis.lpush("logs:" + source, JSON.stringify({ ts: new Date().toISOString(), event, ...data }));
     await redis.ltrim("logs:" + source, 0, 499);
-  } catch (e) { console.error("log:", e); }
+  } catch (e) {
+    const _archMonth = new Date().toISOString().slice(0, 7);
+    redis.lpush("logs:archive:" + source + ":" + _archMonth, JSON.stringify({ ts: new Date().toISOString(), event, ...data }))
+      .then(() => redis.ltrim("logs:archive:" + source + ":" + _archMonth, 0, 9999))
+      .then(() => redis.expire("logs:archive:" + source + ":" + _archMonth, 60 * 60 * 24 * 420))
+      .catch(() => {}); console.error("log:", e); }
 }
 
 /* Заявка на ручную проверку доступа — видна в CRM (раздел «Клиенты») */
@@ -1120,7 +1116,19 @@ async function createTaskFromDraft(ctx, u, deferred) {
     assignee: null,
     deferred: !!deferred,
     createdAt: new Date().toISOString(),
+    source: "telegram",
   };
+
+  /* Автораспределение по правилам (Настройки → Распределение / Справочники) */
+  try {
+    const assignPatch = await computeAssignPatch(redis, { text: task.text, source: "telegram", alreadyAssigned: false });
+    if (assignPatch.assignee) {
+      task.assignee = assignPatch.assignee;
+      task.status = "in_progress";
+      if (assignPatch.priority) task.priority = assignPatch.priority;
+      if (assignPatch.dueDate) task.dueDate = assignPatch.dueDate;
+    }
+  } catch (e) { /* автораспределение не критично, задача создаётся в любом случае */ }
 
   /* Сохраняем задачу сразу — она не потеряется, даже если отправка в группу упадёт */
   await redis.set(taskKey(num), task);

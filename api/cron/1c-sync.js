@@ -21,6 +21,31 @@
    ============================================================ */
 
 const jwt = require("jsonwebtoken");
+const { Redis } = require("@upstash/redis");
+
+const redis = new Redis({
+  url: process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL,
+  token: process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN,
+});
+const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+async function tgToGroup(payload) {
+  if (!TG_TOKEN) return null;
+  let group = await redis.get("group");
+  if (!group) return null;
+  const call = (chatId) =>
+    fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, ...payload }),
+    }).then((r) => r.json()).catch(() => null);
+  let resp = await call(Number(group));
+  if (resp && !resp.ok && resp.parameters && resp.parameters.migrate_to_chat_id) {
+    group = resp.parameters.migrate_to_chat_id;
+    await redis.set("group", group);
+    resp = await call(Number(group));
+  }
+  return resp;
+}
 
 const CRON_SECRET = process.env.CRON_SECRET || "";
 const JWT_SECRET = process.env.JWT_SECRET || process.env.CRM_JWT_SECRET || "";
@@ -81,9 +106,28 @@ module.exports = async (req, res) => {
       results.push(row);
     }
 
+    /* Мониторинг: раньше сбой синка был виден только если кто-то открывал
+       Vercel-логи или замечал устаревшие данные в 1С-разделе. Теперь если
+       хотя бы одна база не смогла синкнуть ни один тип сущностей — шлём
+       алерт в группу бухгалтеров с перечнем проблемных баз. */
+    const KEYS = ["orgs", "counterparties", "contracts", "nomenclature", "reports", "employees", "positions", "departments"];
+    const brokenBases = results
+      .filter((row) => KEYS.every((k) => row[k] && row[k].ok === false))
+      .map((row) => `${row.name}: ${row.orgs && row.orgs.error ? row.orgs.error : "неизвестная ошибка"}`);
+    if (brokenBases.length) {
+      await tgToGroup({
+        text: `⚠️ <b>Ночной синк 1С не смог обновить ни один справочник</b> в ${brokenBases.length} из ${ready.length} баз:\n${brokenBases.map((b) => "• " + b).join("\n")}\n\nПроверьте логи Vercel (cron/1c-sync) и доступ к базе в Clobus.`,
+        parse_mode: "HTML",
+      }).catch(() => null);
+    }
+
     return res.status(200).json({ ok: true, total: apps.length, synced: ready.length, results });
   } catch (e) {
     console.error("1c-sync cron:", e);
+    await tgToGroup({
+      text: `🔴 <b>Ночной синк 1С упал целиком</b>\n${String(e).slice(0, 300)}\n\nПроверьте логи Vercel (cron/1c-sync).`,
+      parse_mode: "HTML",
+    }).catch(() => null);
     return res.status(200).json({ ok: false, error: String(e).slice(0, 300) });
   }
 };

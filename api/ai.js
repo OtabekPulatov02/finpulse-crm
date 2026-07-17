@@ -25,7 +25,12 @@ async function logEvent(event, data) {
   try {
     await redis.lpush("logs:crm", JSON.stringify({ ts: new Date().toISOString(), event, ...data }));
     await redis.ltrim("logs:crm", 0, 499);
-  } catch (e) { /* noop */ }
+  } catch (e) {
+    const _archMonth = new Date().toISOString().slice(0, 7);
+    redis.lpush("logs:archive:crm:" + _archMonth, JSON.stringify({ ts: new Date().toISOString(), event, ...data }))
+      .then(() => redis.ltrim("logs:archive:crm:" + _archMonth, 0, 9999))
+      .then(() => redis.expire("logs:archive:crm:" + _archMonth, 60 * 60 * 24 * 420))
+      .catch(() => {}); /* noop */ }
 }
 
 
@@ -333,17 +338,7 @@ async function pushThreadEntry(num, text) {
 /* Лёгкая нечёткая оценка похожести названий контрагентов — та же эвристика,
    что и в api/1c.js (подстрока + пересечение слов), нужна здесь, чтобы понять,
    на какой из предложенных вариантов бухгалтер ответил в группе. */
-function fuzzyScoreLocal(a, b) {
-  if (!a || !b) return 0;
-  if (a === b) return 1;
-  if (a.includes(b) || b.includes(a)) return 0.85;
-  const wa = new Set(a.split(" ").filter((w) => w.length > 2));
-  const wb = new Set(b.split(" ").filter((w) => w.length > 2));
-  if (!wa.size || !wb.size) return 0;
-  let common = 0;
-  for (const w of wa) if (wb.has(w)) common++;
-  return common / Math.max(wa.size, wb.size);
-}
+const { fuzzyScore: fuzzyScoreLocal } = require("../lib/fuzzy.js");
 
 const NEW_COUNTERPARTY_RE = /нов(ый|ая|ого)\s*(контрагент|клиент|компани)|созда(й|ть|ем|йте)|нет в списке|нет такого|not in (the )?list|new (client|company|counterparty)/i;
 const CONFIRM_YES_RE = /^(да|ага|верно|так|точно|yes|confirm|подтвержда)/i;

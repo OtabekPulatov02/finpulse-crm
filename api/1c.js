@@ -71,7 +71,12 @@ async function logEvent(event, data) {
   try {
     await redis.lpush("logs:crm", JSON.stringify({ ts: new Date().toISOString(), event, ...data }));
     await redis.ltrim("logs:crm", 0, 499);
-  } catch (e) { /* noop */ }
+  } catch (e) {
+    const _archMonth = new Date().toISOString().slice(0, 7);
+    redis.lpush("logs:archive:crm:" + _archMonth, JSON.stringify({ ts: new Date().toISOString(), event, ...data }))
+      .then(() => redis.ltrim("logs:archive:crm:" + _archMonth, 0, 9999))
+      .then(() => redis.expire("logs:archive:crm:" + _archMonth, 60 * 60 * 24 * 420))
+      .catch(() => {}); /* noop */ }
 }
 
 /* ---- ping всех баз: доступен ли OData и настроен ли состав ---- */
@@ -297,17 +302,7 @@ async function counterpartyRefByInn(appPath, inn) {
 /* Нечёткий поиск контрагента, когда точного совпадения по имени нет — например,
    при опечатке, другой раскладке (латиница вместо кириллицы) или сокращении.
    Простая эвристика без внешних библиотек: пересечение по подстроке + общим словам. */
-function fuzzyScore(a, b) {
-  if (!a || !b) return 0;
-  if (a === b) return 1;
-  if (a.includes(b) || b.includes(a)) return 0.85;
-  const wa = new Set(a.split(" ").filter((w) => w.length > 2));
-  const wb = new Set(b.split(" ").filter((w) => w.length > 2));
-  if (!wa.size || !wb.size) return 0;
-  let common = 0;
-  for (const w of wa) if (wb.has(w)) common++;
-  return common / Math.max(wa.size, wb.size);
-}
+const { fuzzyScore } = require("../lib/fuzzy.js");
 
 /* Создаёт минимальную черновую карточку контрагента в 1С, если его вообще нет
    в справочнике (ни точного совпадения, ни похожих вариантов) — чтобы поле

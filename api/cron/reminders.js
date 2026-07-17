@@ -118,7 +118,12 @@ async function logEvent(source, event, data) {
   try {
     await redis.lpush("logs:" + source, JSON.stringify({ ts: new Date().toISOString(), event, ...data }));
     await redis.ltrim("logs:" + source, 0, 499);
-  } catch (e) { /* noop */ }
+  } catch (e) {
+    const _archMonth = new Date().toISOString().slice(0, 7);
+    redis.lpush("logs:archive:" + source + ":" + _archMonth, JSON.stringify({ ts: new Date().toISOString(), event, ...data }))
+      .then(() => redis.ltrim("logs:archive:" + source + ":" + _archMonth, 0, 9999))
+      .then(() => redis.expire("logs:archive:" + source + ":" + _archMonth, 60 * 60 * 24 * 420))
+      .catch(() => {}); /* noop */ }
 }
 
 async function processTaskReminders(todayStr) {
@@ -328,9 +333,26 @@ module.exports = async (req, res) => {
 
     await logEvent("cron", "reminders_sent", { tasks, calendar });
 
+    /* Мониторинг: если один из двух блоков крона упал — раньше это было
+       видно только в логах Vercel, никто не узнавал, пока не замечал
+       отсутствие напоминаний. Теперь шлём алерт в группу бухгалтеров. */
+    const failed = [];
+    if (tasks && tasks.error) failed.push(`задачи: ${tasks.error}`);
+    if (calendar && calendar.error) failed.push(`календарь: ${calendar.error}`);
+    if (failed.length) {
+      await tgToGroup("sendMessage", {
+        text: `⚠️ <b>Крон напоминаний частично не выполнился</b>\n${failed.map((f) => "• " + f).join("\n")}\n\nПроверьте логи Vercel (cron/reminders).`,
+        parse_mode: "HTML",
+      }).catch(() => null);
+    }
+
     return res.status(200).json({ ok: true, tasks, calendar });
   } catch (e) {
     console.error("cron reminders:", e);
+    await tgToGroup("sendMessage", {
+      text: `🔴 <b>Крон напоминаний упал целиком</b>\n${String(e).slice(0, 300)}\n\nНапоминания сегодня не отправлены — проверьте логи Vercel.`,
+      parse_mode: "HTML",
+    }).catch(() => null);
     return res.status(200).json({ ok: false, error: String(e).slice(0, 300) });
   }
 };
