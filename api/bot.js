@@ -63,13 +63,15 @@ const { mdToTelegramHtml } = require("../lib/markdown.js");
 /* Прямое обращение к ИИ-агенту в группе бухгалтеров (/ask или упоминание
    бота) — тот же агент с доступом к CRM/1С, что и AI-чат в CRM; диалог
    заодно попадает в общую историю AI-чата (видно супер-админу там же). */
-async function askAiInGroup(ctx, query, msg) {
+async function askAiInGroup(ctx, query, msg, priorHistory) {
   const JWT_SECRET = process.env.JWT_SECRET || process.env.CRM_JWT_SECRET || "";
   if (!JWT_SECRET) {
     await ctx.reply("ИИ временно недоступен (не настроен JWT_SECRET).", { reply_to_message_id: msg.message_id }).catch(() => {});
     return;
   }
   const byName = [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(" ") || "Бухгалтер";
+  const history = Array.isArray(priorHistory) ? priorHistory : [];
+  const messages = history.concat([{ role: "user", content: query }]);
   await ctx.replyWithChatAction("typing").catch(() => {});
   let typingTimer = setInterval(() => ctx.replyWithChatAction("typing").catch(() => {}), 4000);
   try {
@@ -78,7 +80,7 @@ async function askAiInGroup(ctx, query, msg) {
     const r = await fetch(`${AUTOWORK_API_ORIGIN}/api/ai`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-      body: JSON.stringify({ action: "agent", messages: [{ role: "user", content: query }] }),
+      body: JSON.stringify({ action: "agent", messages }),
       signal: AbortSignal.timeout(55000),
     }).then((x) => x.json()).catch((e) => ({ ok: false, error: String(e).slice(0, 200) }));
     clearInterval(typingTimer);
@@ -91,7 +93,14 @@ async function askAiInGroup(ctx, query, msg) {
       ? `<i>🔧 ${r.steps.map((s) => escapeHtml(s.tool)).join(", ")}</i>\n\n`
       : "";
     const body = mdToTelegramHtml(r.reply || "(пустой ответ)");
-    await sendLong(ctx, `🤖 <b>ИИ-бухгалтер</b> (${escapeHtml(byName)}):\n${stepsLine}${body}`, { parse_mode: "HTML", reply_to_message_id: msg.message_id });
+    const sent = await sendLong(ctx, `🤖 <b>ИИ-бухгалтер</b> (${escapeHtml(byName)}):\n${stepsLine}${body}`, { parse_mode: "HTML", reply_to_message_id: msg.message_id });
+    /* Сохраняем историю диалога под id только что отправленного сообщения —
+       реплай НА ЛЮБОЕ сообщение ИИ (не только на карточки задач/уточнения)
+       продолжает диалог с полным контекстом, а не начинает его заново. */
+    if (sent && sent.message_id) {
+      const newHistory = messages.concat([{ role: "assistant", content: r.reply || "" }]).slice(-20);
+      try { await redis.set("askconvo:" + sent.message_id, newHistory, { ex: 3 * 24 * 3600 }); } catch (e) { /* noop */ }
+    }
     try { await redis.lpush("logs:crm", JSON.stringify({ ts: new Date().toISOString(), event: "ai_ask_group", by: byName, query: query.slice(0, 200) })); await redis.ltrim("logs:crm", 0, 499); } catch (e) { /* noop */ }
   } finally {
     clearInterval(typingTimer);
@@ -1616,6 +1625,22 @@ bot.on("message", async (ctx) => {
     }
 
     if (!msg.reply_to_message) return;
+
+    /* --- Продолжение диалога с ИИ: реплай на ЛЮБОЕ прошлое сообщение ИИ
+       (не команда /ask и не упоминание — просто обычный ответ в Telegram)
+       должен продолжать тот же диалог с сохранённым контекстом, а не
+       игнорироваться. Смотрим, есть ли сохранённая история под id
+       сообщения, на которое ответили. */
+    const askConvo = await redis.get("askconvo:" + msg.reply_to_message.message_id);
+    if (askConvo) {
+      const replyText = (msg.text || msg.caption || "").trim();
+      if (!replyText) {
+        return ctx.reply("Пожалуйста, ответьте текстом на сообщение ИИ-бухгалтера.", { reply_to_message_id: msg.message_id }).catch(() => {});
+      }
+      const history = Array.isArray(askConvo) ? askConvo : [];
+      await askAiInGroup(ctx, replyText, msg, history).catch((e) => console.error("askAiInGroup(convo):", String(e).slice(0, 200)));
+      return;
+    }
 
     /* --- Ответ бухгалтера на уточняющий вопрос ИИ-бухгалтера (reply на
        сообщение вида "🤖 Задача №N — нужна ваша помощь") --- НЕ пересылаем
