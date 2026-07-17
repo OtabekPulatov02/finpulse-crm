@@ -42,6 +42,7 @@
    ============================================================ */
 
 const { Redis } = require("@upstash/redis");
+const { DEFAULT_CATEGORIES } = require("../lib/knowledge.js");
 const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
 
@@ -1341,7 +1342,7 @@ module.exports = async (req, res) => {
       if (q.r === "bot_categories") {
         if (!isStaff) return res.status(403).json({ ok: false, error: "forbidden" });
         const cats = (await redis.get("bot:categories")) || null;
-        return res.status(200).json({ ok: true, categories: cats });
+        return res.status(200).json({ ok: true, categories: Array.isArray(cats) && cats.length ? cats : DEFAULT_CATEGORIES });
       }
       if (q.r === "notif_settings") {
         if (!isStaff) return res.status(403).json({ ok: false, error: "forbidden" });
