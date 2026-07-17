@@ -560,6 +560,50 @@ async function positionRefFor(appPath, name) {
   return scored.length ? { ref: scored[0].ref, name: scored[0].name } : null;
 }
 
+/* ---------- Подразделения (Catalog_ПодразделенияОрганизаций) — по той же
+   схеме, что Должности выше. Пока не используется ни одним черновиком (ни
+   один тип документа не заполняет Подразделение_Key), но синк доступен —
+   если понадобится заполнять поле подразделения в каком-то документе,
+   departmentRefFor уже готов к использованию. ---------- */
+async function getDepartments(appPath) {
+  const r = await odata(appPath, "Catalog_ПодразделенияОрганизаций",
+    "$format=json&$select=Ref_Key,Description&$filter=DeletionMark eq false and IsFolder eq false");
+  if (r.status === 401) return { ok: false, error: "auth: проверьте ODATA_1C_LOGIN/PASSWORD" };
+  if (r.status === 404) return { ok: false, error: "Catalog_ПодразделенияОрганизаций не включён в состав OData — настройте состав REST-сервиса" };
+  if (r.status !== 200 || !r.json) return { ok: false, error: `HTTP ${r.status}` };
+  return { ok: true, departments: (r.json.value || []).map((d) => ({ ref: d.Ref_Key, name: d.Description })) };
+}
+
+async function syncDepartments(appPath, appName, actor) {
+  const res = await getDepartments(appPath);
+  if (!res.ok) return res;
+  let count = 0;
+  const light = [];
+  for (const d of res.departments) {
+    const norm = normCompany(d.name);
+    if (!norm) continue;
+    await redis.set("1c:deptmap:" + appPath + ":" + norm, { ref: d.ref, name: d.name });
+    light.push({ ref: d.ref, name: d.name, norm });
+    count++;
+  }
+  await redis.set("1c:deptlist:" + appPath, light);
+  await logEvent("1c_sync_departments", { app: appName, count, by: actor || "CRM" });
+  return { ok: true, total: res.departments.length, mapped: count };
+}
+
+async function departmentRefFor(appPath, name) {
+  const norm = normCompany(name || "");
+  if (!norm) return null;
+  const exact = await redis.get("1c:deptmap:" + appPath + ":" + norm);
+  if (exact) return exact;
+  const list = (await redis.get("1c:deptlist:" + appPath)) || [];
+  const scored = list
+    .map((d) => ({ ...d, score: fuzzyScore(norm, d.norm) }))
+    .filter((d) => d.score >= 0.6)
+    .sort((a, b) => b.score - a.score);
+  return scored.length ? { ref: scored[0].ref, name: scored[0].name } : null;
+}
+
 /* ---------- Обороты по счёту (регистр бухгалтерии "Хозрасчетный") ----------
    Субконто (аналитика по контрагентам) не публикуется в этой конфигурации через
    стандартный OData-интерфейс, поэтому точную задолженность конкретного контрагента
@@ -743,6 +787,63 @@ async function createDraftDoc(appPath, entity, fields) {
   return { ok: true, ref: json?.Ref_Key || null, number: json?.Number || null, raw: json };
 }
 
+/* Отмена/удаление документа, созданного ИИ, прямо из CRM (без необходимости
+   идти в саму 1С) — закрывает пробел "если ИИ создал не тот документ, откатить
+   можно только руками в 1С". Работает ТОЛЬКО для документов, которые сам ИИ
+   создал (проверяем по журналу "1c:doclog"), и ТОЛЬКО пока они не проведены
+   (Posted:false) — если бухгалтер уже проверил и провёл документ, отменять
+   его через это действие нельзя, это уже реальная бухгалтерская операция. */
+async function readDocPosted(appPath, entity, ref) {
+  const r = await odata(appPath, entity, `$format=json&$filter=Ref_Key eq guid'${ref}'&$select=Posted`);
+  if (r.status !== 200 || !r.json || !Array.isArray(r.json.value) || !r.json.value.length) return null;
+  return !!r.json.value[0].Posted;
+}
+
+async function deleteDraftDoc(appPath, entity, ref) {
+  const url = `${BASE}${appPath}/odata/standard.odata/${entity}(guid'${ref}')?$format=json`;
+  const r = await fetch(url, {
+    method: "DELETE",
+    headers: { Authorization: authHeader(), Accept: "application/json" },
+    signal: AbortSignal.timeout(20000),
+  });
+  if (r.status === 401) return { ok: false, error: "auth: проверьте ODATA_1C_LOGIN/PASSWORD" };
+  if (r.status >= 400) {
+    const text = await r.text().catch(() => "");
+    return { ok: false, error: `HTTP ${r.status}: ${text.slice(0, 300)}` };
+  }
+  return { ok: true };
+}
+
+async function cancelAiDoc(num, actor) {
+  const task = await redis.get("task:" + num);
+  if (!task || !task.doc1c) return { ok: false, error: "у задачи нет документа 1С, созданного ИИ" };
+  const { app, entity, ref, number } = task.doc1c;
+
+  /* защита: разрешаем отменять только через журнал "1c:doclog" — то есть
+     только документы, реально созданные execute_task (а не любую ссылку,
+     которую кто-то мог бы подсунуть), и только пока не проведён */
+  const logRows = (await redis.lrange("1c:doclog", 0, 199)) || [];
+  const found = logRows.some((row) => {
+    try {
+      const r = typeof row === "string" ? JSON.parse(row) : row;
+      return r && r.num === num && r.ref === ref;
+    } catch (e) { return false; }
+  });
+  if (!found) return { ok: false, error: "документ не найден в журнале ИИ-документов — отмена доступна только для документов, созданных автономным ИИ через execute_task" };
+
+  let posted = null;
+  try { posted = await readDocPosted(app, entity, ref); } catch (e) { /* noop */ }
+  if (posted === true) return { ok: false, error: "документ уже проведён в 1С — отменить его через CRM нельзя, это уже реальная бухгалтерская операция. Отменяйте проведённые документы только в самой 1С." };
+
+  const del = await deleteDraftDoc(app, entity, ref);
+  if (!del.ok) return del;
+
+  task.doc1c = null;
+  await redis.set("task:" + num, task);
+  await logEvent("1c_ai_doc_cancelled", { num, entity, ref, number, app, by: actor || "CRM" });
+  return { ok: true, entity, ref, number };
+}
+
 /* Выполнение задачи CRM: черновик AI → документ в 1С базе клиента */
 /* Проверка дублей: не создаём ещё один документ, если за последние 24ч по этой же
    компании/типу/сумме уже был создан документ в 1С (в т.ч. из другой задачи) —
@@ -771,6 +872,33 @@ async function findRecentSimilarDoc1C(company, type, amount, excludeNum) {
   return null;
 }
 
+/* ============================================================
+   Код-контролируемая защита перед force/confirmNewCounterparty/*Ref-override
+   в execute_task: раньше это регулировалось ТОЛЬКО системным промптом ИИ
+   ("сначала спроси через ask_user, потом вызови повторно с force:true") —
+   ничто в коде не проверяло, что уточнение действительно происходило.
+   Модель (или текст задачи через промпт-инъекцию) могла в теории выставить
+   force:true сразу при первом вызове.
+   Теперь: execute_task сам помечает "1c:pending_confirm:<num>" при первом
+   отказе (duplicate/counterpartyAmbiguous/employeeAmbiguous), и honоurим
+   force/confirmNewCounterparty/*Ref-override только если такая метка
+   реально стоит для нужного вида уточнения — то есть только "вторым
+   вызовом", после того как execute_task сам об этом попросил. Метка живёт
+   30 минут и снимается сразу после использования. */
+const PENDING_CONFIRM_TTL_SEC = 30 * 60;
+async function setPendingConfirm(num, kind) {
+  try { await redis.set("1c:pending_confirm:" + num, { kind, at: new Date().toISOString() }, { ex: PENDING_CONFIRM_TTL_SEC }); } catch (e) { /* noop */ }
+}
+async function checkPendingConfirm(num, kind) {
+  try {
+    const rec = await redis.get("1c:pending_confirm:" + num);
+    return !!(rec && rec.kind === kind);
+  } catch (e) { return false; }
+}
+async function clearPendingConfirm(num) {
+  try { await redis.del("1c:pending_confirm:" + num); } catch (e) { /* noop */ }
+}
+
 async function executeTaskIn1C(num, actor, opts) {
   opts = opts || {};
   const force = !!opts.force;
@@ -786,9 +914,13 @@ async function executeTaskIn1C(num, actor, opts) {
   const org = await orgFor(task.company);
   if (!org) return { ok: false, error: `организация «${task.company}» не найдена в картах 1С — выполните синк организаций` };
 
+  if (force && !(await checkPendingConfirm(num, "duplicate"))) {
+    return { ok: false, error: "force:true отклонён — execute_task ещё не помечал эту задачу как дубликат в этом окне (30 мин). Сначала вызовите execute_task без force и дождитесь duplicate:true, либо явного подтверждения человека." };
+  }
   if (!force) {
     const dup = await findRecentSimilarDoc1C(task.company, draft.type, draft.amount, num);
     if (dup) {
+      await setPendingConfirm(num, "duplicate");
       return {
         ok: false,
         duplicate: true,
@@ -796,6 +928,8 @@ async function executeTaskIn1C(num, actor, opts) {
         existingTask: dup.num,
       };
     }
+  } else {
+    await clearPendingConfirm(num);
   }
 
   /* Базовые поля, общие для документов БУ УЗ 3.0. Точная схема реквизитов
@@ -822,6 +956,10 @@ async function executeTaskIn1C(num, actor, opts) {
     try {
       let cp = null;
       if (counterpartyRefOverride) {
+        if (!(await checkPendingConfirm(num, "counterparty"))) {
+          return { ok: false, error: "counterpartyRef отклонён — execute_task ещё не предлагал вариантов контрагента для этой задачи в этом окне (30 мин). Сначала вызовите execute_task без counterpartyRef и дождитесь counterpartyAmbiguous:true с suggestions." };
+        }
+        await clearPendingConfirm(num);
         /* бухгалтер явно выбрал конкретный вариант из предложенных ранее — это
            самый надёжный источник, доверяем без повторной проверки */
         cp = { ref: counterpartyRefOverride };
@@ -845,6 +983,10 @@ async function executeTaskIn1C(num, actor, opts) {
            даём человеку возможность подтвердить (кроме явного confirmNewCounterparty) */
         const suggestions = await suggestCounterparties(org.app, draft.counterparty, 3).catch(() => []);
         if (confirmNewCounterparty) {
+          if (!(await checkPendingConfirm(num, "confirm_new"))) {
+            return { ok: false, error: "confirmNewCounterparty отклонён — execute_task ещё не помечал этого контрагента как «нет совпадений» для этой задачи в этом окне (30 мин). Сначала вызовите execute_task без confirmNewCounterparty и дождитесь noMatch:true." };
+          }
+          await clearPendingConfirm(num);
           /* бухгалтер явно подтвердил, что это новый контрагент — только теперь
              создаём минимальную черновую карточку */
           try {
@@ -855,6 +997,7 @@ async function executeTaskIn1C(num, actor, opts) {
             }
           } catch (e4) { /* не критично — документ всё равно создастся, просто без Контрагент_Key */ }
         } else if (suggestions.length) {
+          await setPendingConfirm(num, "counterparty");
           return {
             ok: false,
             counterpartyAmbiguous: true,
@@ -862,6 +1005,7 @@ async function executeTaskIn1C(num, actor, opts) {
             error: `Контрагент «${draft.counterparty}»${draft.counterpartyInn ? " (ИНН " + draft.counterpartyInn + ")" : ""} не найден точно в 1С (ни по ИНН, ни по названию). Похожие варианты: ${suggestions.map((s) => s.name).join(", ")}. Ответьте названием нужного варианта, либо напишите "новый контрагент", если его точно ещё нет в 1С.`,
           };
         } else if (!force) {
+          await setPendingConfirm(num, "confirm_new");
           return {
             ok: false,
             counterpartyAmbiguous: true,
@@ -886,6 +1030,10 @@ async function executeTaskIn1C(num, actor, opts) {
     }
     let emp = null;
     if (employeeRefOverride) {
+      if (!(await checkPendingConfirm(num, "employee"))) {
+        return { ok: false, error: "employeeRef отклонён — execute_task ещё не предлагал вариантов сотрудника для этой задачи в этом окне (30 мин). Сначала вызовите execute_task без employeeRef и дождитесь employeeAmbiguous:true с suggestions." };
+      }
+      await clearPendingConfirm(num);
       emp = { ref: employeeRefOverride, individualRef: null };
     } else {
       emp = await employeeRefFor(org.app, draft.employee);
@@ -900,6 +1048,7 @@ async function executeTaskIn1C(num, actor, opts) {
       if (byNameCandidates.length === 1) {
         emp = byNameCandidates[0];
       } else if (byNameCandidates.length > 1) {
+        await setPendingConfirm(num, "employee");
         return {
           ok: false,
           employeeAmbiguous: true,
@@ -910,6 +1059,7 @@ async function executeTaskIn1C(num, actor, opts) {
     }
     if (!emp) {
       const suggestions = await suggestEmployees(org.app, draft.employee, 3).catch(() => []);
+      await setPendingConfirm(num, "employee");
       return {
         ok: false,
         employeeAmbiguous: true,
@@ -1009,6 +1159,8 @@ async function executeTaskIn1C(num, actor, opts) {
     await redis.ltrim("1c:doclog", 0, 499);
   } catch (e) { /* журнал не критичен для самой операции */ }
 
+  await clearPendingConfirm(num);
+
   return {
     ok: true, entity, ref: r.ref, number: r.number, app: org.app,
     ...(newCounterpartyCreated ? { note: `Контрагент «${draft.counterparty}» не найден в 1С — создана новая черновая карточка контрагента, проверьте её данные перед проведением документа.` } : {}),
@@ -1082,6 +1234,13 @@ module.exports = async (req, res) => {
         if (!r.ok) return res.status(200).json(r);
         return res.status(200).json({ ok: true, count: r.positions.length, sample: r.positions.slice(0, 3) });
       }
+      if (q.r === "departments" && q.app) {
+        const a = findApp(q.app);
+        if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
+        const r = await getDepartments(a.path);
+        if (!r.ok) return res.status(200).json(r);
+        return res.status(200).json({ ok: true, count: r.departments.length, sample: r.departments.slice(0, 3) });
+      }
       if (q.r === "nomenclature" && q.app) {
         const a = findApp(q.app);
         if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
@@ -1125,7 +1284,7 @@ module.exports = async (req, res) => {
         items.sort((x, y) => new Date(x.nextExpectedPeriodEnd) - new Date(y.nextExpectedPeriodEnd));
         return res.status(200).json({ ok: true, items, note: "nextExpectedPeriodEnd — вывод из истории и периодичности отчёта в 1С (ближайший период после сегодняшней даты), НЕ официальный срок сдачи (1С его не хранит отдельным полем); используйте как ориентир, сверяйте с реальным сроком. periodsSkipped>0 значит в 1С давно не готовили этот отчёт — стоит проверить, не отстаёт ли синк или сама подготовка отчёта в 1С." });
       }
-      return res.status(200).json({ ok: true, service: "Finpulse 1C bridge", routes: ["apps", "ping", "meta", "orgs", "counterparties", "nomenclature", "contracts", "turnover", "doclog", "reports", "employees", "positions"] });
+      return res.status(200).json({ ok: true, service: "Finpulse 1C bridge", routes: ["apps", "ping", "meta", "orgs", "counterparties", "nomenclature", "contracts", "turnover", "doclog", "reports", "employees", "positions", "departments"] });
     }
 
     if (req.method === "POST") {
@@ -1149,6 +1308,14 @@ module.exports = async (req, res) => {
         const a = findApp(body.app);
         if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
         return res.status(200).json(await syncPositions(a.path, a.name, authUser?.name));
+      }
+      if (body && body.action === "sync_departments" && body.app) {
+        const a = findApp(body.app);
+        if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
+        return res.status(200).json(await syncDepartments(a.path, a.name, authUser?.name));
+      }
+      if (body && body.action === "cancel_ai_doc" && body.num) {
+        return res.status(200).json(await cancelAiDoc(Number(body.num), authUser?.name));
       }
       if (body && body.action === "create_draft" && body.app && body.entity) {
         /* whitelist: entity должен быть одним из реальных типов документов БУ УЗ 3.0,
