@@ -1241,7 +1241,9 @@ module.exports = async (req, res) => {
         const r = await fetch(url, { headers: { Authorization: authHeader() }, signal: AbortSignal.timeout(20000) });
         const text = await r.text();
         const names = [...text.matchAll(/EntityType Name="(Catalog_[^"]*Подразделен[^"]*)"/g)].map(m => m[1]);
-        return res.status(200).json({ ok: true, status: r.status, names });
+        const idx = text.indexOf('EntityType Name="Catalog_ПодразделенияОрганизаций"');
+        const props = idx >= 0 ? [...text.slice(idx, idx + 4000).matchAll(/<Property Name="([^"]+)"\s+Type="([^"]+)"/g)].map(m => m[1] + ":" + m[2]) : [];
+        return res.status(200).json({ ok: true, status: r.status, names, props });
       }
       if (q.r === "departments" && q.app) {
         const a = findApp(q.app);
