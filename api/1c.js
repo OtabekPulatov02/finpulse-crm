@@ -567,7 +567,7 @@ async function positionRefFor(appPath, name) {
    departmentRefFor уже готов к использованию. ---------- */
 async function getDepartments(appPath) {
   const r = await odata(appPath, "Catalog_ПодразделенияОрганизаций",
-    "$format=json&$select=Ref_Key,Description&$filter=DeletionMark eq false and IsFolder eq false");
+    "$format=json&$select=Ref_Key,Description&$filter=DeletionMark eq false");
   if (r.status === 401) return { ok: false, error: "auth: проверьте ODATA_1C_LOGIN/PASSWORD" };
   if (r.status === 404) return { ok: false, error: "Catalog_ПодразделенияОрганизаций не включён в состав OData — настройте состав REST-сервиса" };
   if (r.status !== 200 || !r.json) return { ok: false, error: `HTTP ${r.status}` };
@@ -1233,17 +1233,6 @@ module.exports = async (req, res) => {
         const r = await getPositions(a.path);
         if (!r.ok) return res.status(200).json(r);
         return res.status(200).json({ ok: true, count: r.positions.length, sample: r.positions.slice(0, 3) });
-      }
-      if (q.r === "metadbg" && q.app) {
-        const a = findApp(q.app);
-        if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
-        const url = `${BASE}${a.path}/odata/standard.odata/$metadata`;
-        const r = await fetch(url, { headers: { Authorization: authHeader() }, signal: AbortSignal.timeout(20000) });
-        const text = await r.text();
-        const names = [...text.matchAll(/EntityType Name="(Catalog_[^"]*Подразделен[^"]*)"/g)].map(m => m[1]);
-        const idx = text.indexOf('EntityType Name="Catalog_ПодразделенияОрганизаций"');
-        const props = idx >= 0 ? [...text.slice(idx, idx + 4000).matchAll(/<Property Name="([^"]+)"\s+Type="([^"]+)"/g)].map(m => m[1] + ":" + m[2]) : [];
-        return res.status(200).json({ ok: true, status: r.status, names, props });
       }
       if (q.r === "departments" && q.app) {
         const a = findApp(q.app);
