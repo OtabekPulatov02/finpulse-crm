@@ -1237,16 +1237,28 @@ module.exports = async (req, res) => {
       if (q.r === "vacdbg" && q.app) {
         const a = findApp(q.app);
         if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
-        const getR = await odata(a.path, "Document_Отпуск", "$format=json&$top=1");
+        const orgR = await odata(a.path, "Catalog_Организации", "$format=json&$top=1&$select=Ref_Key,Description");
+        const empR = await odata(a.path, "Catalog_Сотрудники", "$format=json&$top=1&$select=Ref_Key,Description,ФизическоеЛицо_Key");
+        const org = orgR.json?.value?.[0];
+        const emp = empR.json?.value?.[0];
+        const payload = {
+          Date: new Date().toISOString().slice(0, 19),
+          "Организация_Key": org?.Ref_Key,
+          "Сотрудник_Key": emp?.Ref_Key,
+          "ФизическоеЛицо_Key": emp?.["ФизическоеЛицо_Key"],
+          "ДатаНачалаОсновногоОтпуска": new Date().toISOString().slice(0, 19),
+          "КоличествоДнейОсновногоОтпуска": 5,
+          Posted: false,
+        };
         const url = `${BASE}${a.path}/odata/standard.odata/Document_Отпуск?$format=json`;
         const postR = await fetch(url, {
           method: "POST",
           headers: { Authorization: authHeader(), Accept: "application/json", "Content-Type": "application/json" },
-          body: JSON.stringify({ Posted: false }),
+          body: JSON.stringify(payload),
           signal: AbortSignal.timeout(20000),
         });
         const postText = await postR.text();
-        return res.status(200).json({ ok: true, getStatus: getR.status, getSample: getR.json ? (getR.json.value||[]).length : null, postStatus: postR.status, postBody: postText.slice(0, 600) });
+        return res.status(200).json({ ok: true, org, emp, payload, postStatus: postR.status, postBody: postText.slice(0, 800) });
       }
       if (q.r === "departments" && q.app) {
         const a = findApp(q.app);
