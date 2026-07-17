@@ -63,6 +63,24 @@ const { mdToTelegramHtml } = require("../lib/markdown.js");
 /* Прямое обращение к ИИ-агенту в группе бухгалтеров (/ask или упоминание
    бота) — тот же агент с доступом к CRM/1С, что и AI-чат в CRM; диалог
    заодно попадает в общую историю AI-чата (видно супер-админу там же). */
+/* /ask и упоминание бота в группе выдают полноценный admin-токен ИИ-агента
+   (доступ к 1С, CRUD клиентов/сотрудников и т.д.) любому участнику группы —
+   осознанный компромисс (группа закрытая, только бухгалтеры), но без лимита
+   ничто не мешает одному участнику скриптом накрутить огромный OpenAI-счёт
+   или заспамить деструктивные операции. Простой per-user троттлинг. */
+async function groupAskRateLimited(ctx) {
+  const key = "ratelimit:ask:" + (ctx.from && ctx.from.id);
+  try {
+    const count = await redis.incr(key);
+    if (count === 1) await redis.expire(key, 3600);
+    if (count > 20) {
+      await ctx.reply("Слишком много обращений к ИИ за последний час. Попробуйте позже.", { reply_to_message_id: ctx.message.message_id }).catch(() => {});
+      return true;
+    }
+  } catch (e) { /* Redis недоступен — не блокируем */ }
+  return false;
+}
+
 async function askAiInGroup(ctx, query, msg, priorHistory) {
   const JWT_SECRET = process.env.JWT_SECRET || process.env.CRM_JWT_SECRET || "";
   if (!JWT_SECRET) {
@@ -488,6 +506,24 @@ async function setUser(id, data) {
 
 /* ---------------- Бот ---------------- */
 const bot = new Bot(process.env.TELEGRAM_BOT_TOKEN);
+
+/* Дедупликация апдейтов Telegram: вебхук может доставить один и тот же
+   update дважды (например, если наш обработчик не уложился в таймаут
+   Telegram — сейчас у askAiInGroup до 55с на вызов ИИ-агента, что близко
+   к типичному вебхук-таймауту). Без дедупа повторная доставка запускает
+   тот же /ask или голосовое сообщение ещё раз — двойной расход OpenAI и
+   задвоенные сообщения в группе/клиенту. SETNX с недолгим TTL достаточно:
+   повторная доставка происходит быстро (секунды-минуты), не часами позже. */
+bot.use(async (ctx, next) => {
+  const updateId = ctx.update && ctx.update.update_id;
+  if (updateId != null) {
+    try {
+      const first = await redis.set("upd:" + updateId, 1, { nx: true, ex: 600 });
+      if (first !== "OK" && first !== true) return; // уже обработан
+    } catch (e) { /* Redis недоступен — не блокируем обработку из-за этого */ }
+  }
+  return next();
+});
 
 const isPrivate = (ctx) => ctx.chat?.type === "private";
 const isGroup = (ctx) => ctx.chat?.type === "group" || ctx.chat?.type === "supergroup";
@@ -1063,12 +1099,15 @@ bot.callbackQuery(/^nps:(\d+):(\d)$/, async (ctx) => {
   const rating = Number(ctx.match[2]);
   const month = new Date().toISOString().slice(0, 7);
   try {
-    const already = await redis.get("nps:task:" + num);
-    if (already) {
+    /* Атомарная защита от двойного тапа/повторной доставки: set-if-not-exists
+       вместо "проверить потом установить" — иначе два почти одновременных
+       тапа могут оба пройти проверку до того, как первый успеет записаться,
+       задваивая sum/count без возможности исправить это постфактум. */
+    const claimed = await redis.set("nps:task:" + num, rating, { nx: true });
+    if (claimed !== "OK" && claimed !== true) {
       await ctx.answerCallbackQuery("Спасибо, вы уже оценили эту задачу 🙌").catch(() => {});
       return;
     }
-    await redis.set("nps:task:" + num, rating);
     await redis.rpush("nps:" + month, JSON.stringify({
       num, rating,
       by: ctx.from?.username || ctx.from?.first_name || String(ctx.from?.id || ""),
@@ -1579,6 +1618,19 @@ bot.on("message", async (ctx) => {
      сообщение обрабатывается по тому же пути, что и текст/файлы (сама
      аудиозапись тоже прикладывается как файл через extractFile ниже). */
   if (msg.voice && !msg.text && !msg.caption) {
+    /* Лимит на голосовые: без него любой человек, открывший ЛС с ботом,
+       может бесконечно слать голосовые и накручивать счёт за Whisper —
+       ни авторизации, ни бюджетной проверки на этом пути раньше не было. */
+    const voiceLimitKey = "ratelimit:voice:" + ctx.from.id;
+    let voiceCount = 0;
+    try {
+      voiceCount = await redis.incr(voiceLimitKey);
+      if (voiceCount === 1) await redis.expire(voiceLimitKey, 3600);
+    } catch (e) { /* Redis недоступен — не блокируем, лучше лишняя транскрипция чем сломанный бот */ }
+    if (voiceCount > 15) {
+      await ctx.reply("Слишком много голосовых сообщений за последний час. Попробуйте позже или напишите текстом.").catch(() => {});
+      return;
+    }
     try {
       const { transcribeVoiceMessage } = require("../lib/whisper.js");
       const text = await transcribeVoiceMessage(bot.api, msg.voice.file_id);
@@ -1619,6 +1671,7 @@ bot.on("message", async (ctx) => {
         return;
       }
       if (askQuery) {
+        if (await groupAskRateLimited(ctx)) return;
         await askAiInGroup(ctx, askQuery, msg).catch((e) => console.error("askAiInGroup:", String(e).slice(0, 200)));
         return;
       }
@@ -1637,6 +1690,7 @@ bot.on("message", async (ctx) => {
       if (!replyText) {
         return ctx.reply("Пожалуйста, ответьте текстом на сообщение ИИ-бухгалтера.", { reply_to_message_id: msg.message_id }).catch(() => {});
       }
+      if (await groupAskRateLimited(ctx)) return;
       const history = Array.isArray(askConvo) ? askConvo : [];
       await askAiInGroup(ctx, replyText, msg, history).catch((e) => console.error("askAiInGroup(convo):", String(e).slice(0, 200)));
       return;

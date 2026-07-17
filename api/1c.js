@@ -603,6 +603,17 @@ async function departmentRefFor(appPath, name) {
    получить так нельзя — но обороты/движения по счёту за период доступны и полезны
    (напр. "сколько прошло по счёту 5110 за июль"). */
 async function getAccountTurnover(appPath, accountCode, dateFrom, dateTo) {
+  /* accountCode/dateFrom/dateTo сейчас приходят только от admin-агента (ИИ),
+     но собираются в $filter прямой строковой конкатенацией — без валидации
+     значение с одинарной кавычкой сломало бы фильтр или дописало произвольное
+     условие OData. Агент обычно передаёт чистые значения, но не полагаемся
+     на это: жёстко проверяем форму на входе. */
+  if (!/^[0-9.]{1,20}$/.test(String(accountCode || ""))) {
+    return { ok: false, error: "Некорректный код счёта" };
+  }
+  if ((dateFrom && !/^\d{4}-\d{2}-\d{2}$/.test(dateFrom)) || (dateTo && !/^\d{4}-\d{2}-\d{2}$/.test(dateTo))) {
+    return { ok: false, error: "Некорректный формат даты (ожидается YYYY-MM-DD)" };
+  }
   const from = dateFrom ? `${dateFrom}T00:00:00` : null;
   const to = dateTo ? `${dateTo}T23:59:59` : null;
   const dateFilter = (from && to) ? ` and Period ge datetime'${from}' and Period le datetime'${to}'` : "";
