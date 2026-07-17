@@ -1234,61 +1234,6 @@ module.exports = async (req, res) => {
         if (!r.ok) return res.status(200).json(r);
         return res.status(200).json({ ok: true, count: r.positions.length, sample: r.positions.slice(0, 3) });
       }
-      if (q.r === "empdbg" && q.app) {
-        const a = findApp(q.app);
-        if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
-        const r = await odata(a.path, "Catalog_Сотрудники", "$format=json&$top=1&$select=Ref_Key,Description,Организация_Key,ФизическоеЛицо_Key");
-        return res.status(200).json({ ok: true, sample: r.json?.value?.[0] || null });
-      }
-      if (q.r === "vacsample" && q.app) {
-        const a = findApp(q.app);
-        if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
-        const r = await odata(a.path, "Document_Отпуск", "$format=json&$top=1");
-        return res.status(200).json({ ok: true, status: r.status, sample: r.json?.value?.[0] || null });
-      }
-      if (q.r === "vacmeta" && q.app) {
-        const a = findApp(q.app);
-        if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
-        const url = `${BASE}${a.path}/odata/standard.odata/$metadata`;
-        const r = await fetch(url, { headers: { Authorization: authHeader() }, signal: AbortSignal.timeout(20000) });
-        const text = await r.text();
-        const idx = text.indexOf('EntityType Name="Document_Отпуск"');
-        const chunk = idx >= 0 ? text.slice(idx, idx + 6000) : "";
-        const props = [...chunk.matchAll(/<Property Name="([^"]+)"\s+Type="([^"]+)"[^>]*Nullable="([^"]+)"/g)].map(m => `${m[1]}:${m[2]}:nullable=${m[3]}`);
-        return res.status(200).json({ ok: true, props });
-      }
-      if (q.r === "vacdbg" && q.app) {
-        const a = findApp(q.app);
-        if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
-        const orgR = await odata(a.path, "Catalog_Организации", "$format=json&$top=1&$select=Ref_Key,Description");
-        const empR = await odata(a.path, "Catalog_Сотрудники", "$format=json&$top=1&$select=Ref_Key,Description,ФизическоеЛицо_Key");
-        const org = orgR.json?.value?.[0];
-        const emp = empR.json?.value?.[0];
-        const startDate = "2026-08-03T00:00:00";
-        const endDate = "2026-08-07T00:00:00";
-        const payload = {
-          Date: new Date().toISOString().slice(0, 19),
-          "ВидОперации": "Отпуск",
-          "Организация_Key": org?.Ref_Key,
-          "Сотрудник_Key": emp?.Ref_Key,
-          "ФизическоеЛицо_Key": emp?.["ФизическоеЛицо_Key"],
-          "ДатаНачалаОсновногоОтпуска": startDate,
-          "ДатаОкончанияОсновногоОтпуска": endDate,
-          "КоличествоДнейОсновногоОтпуска": 5,
-          "ДатаНачалаСобытия": startDate,
-          "Основание": "Заявление",
-          Posted: false,
-        };
-        const url = `${BASE}${a.path}/odata/standard.odata/Document_Отпуск?$format=json`;
-        const postR = await fetch(url, {
-          method: "POST",
-          headers: { Authorization: authHeader(), Accept: "application/json", "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-          signal: AbortSignal.timeout(20000),
-        });
-        const postText = await postR.text();
-        return res.status(200).json({ ok: true, org, emp, payload, postStatus: postR.status, postBody: postText.slice(0, 800) });
-      }
       if (q.r === "departments" && q.app) {
         const a = findApp(q.app);
         if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
