@@ -1234,18 +1234,6 @@ module.exports = async (req, res) => {
         if (!r.ok) return res.status(200).json(r);
         return res.status(200).json({ ok: true, count: r.positions.length, sample: r.positions.slice(0, 3) });
       }
-      if (q.r === "metadbg2" && q.app) {
-        const a = findApp(q.app);
-        if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
-        const url = `${BASE}${a.path}/odata/standard.odata/$metadata`;
-        const r = await fetch(url, { headers: { Authorization: authHeader() }, signal: AbortSignal.timeout(20000) });
-        const text = await r.text();
-        const all = [...text.matchAll(/(?:EntityType|EntitySet) Name="([^"]+)"/g)].map(m => m[1]);
-        const uniq = [...new Set(all)];
-        const edoRelated = uniq.filter(n => /ЭДО|Didox|Дидокс|ЭлектронныйДокументооборот|ЭлектроннаяПодпись|Обмен/i.test(n));
-        const taskRelated = uniq.filter(n => /Задач|Напомин|Помощник|Дело/i.test(n));
-        return res.status(200).json({ ok: true, total: uniq.length, edoRelated, taskRelated });
-      }
       if (q.r === "departments" && q.app) {
         const a = findApp(q.app);
         if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
