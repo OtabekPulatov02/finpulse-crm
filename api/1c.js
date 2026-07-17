@@ -1234,6 +1234,12 @@ module.exports = async (req, res) => {
         if (!r.ok) return res.status(200).json(r);
         return res.status(200).json({ ok: true, count: r.positions.length, sample: r.positions.slice(0, 3) });
       }
+      if (q.r === "empdbg" && q.app) {
+        const a = findApp(q.app);
+        if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
+        const r = await odata(a.path, "Catalog_Сотрудники", "$format=json&$top=1&$select=Ref_Key,Description,Организация_Key,ФизическоеЛицо_Key");
+        return res.status(200).json({ ok: true, sample: r.json?.value?.[0] || null });
+      }
       if (q.r === "vacsample" && q.app) {
         const a = findApp(q.app);
         if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
