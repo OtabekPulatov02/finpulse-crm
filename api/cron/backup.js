@@ -20,13 +20,9 @@
    более старые файлы удаляются в том же прогоне.
    ============================================================ */
 
-const { Redis } = require("@upstash/redis");
+const redis = require("../../lib/redisClient.js");
 const { exportSnapshot } = require("../../lib/backupExport.js");
 
-const redis = new Redis({
-  url: process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL,
-  token: process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN,
-});
 
 const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const CRON_SECRET = process.env.CRON_SECRET || "";

@@ -41,16 +41,12 @@
    POST /api/crm {action:"calendar_event_delete", id} → только admin
    ============================================================ */
 
-const { Redis } = require("@upstash/redis");
+const redis = require("../lib/redisClient.js");
 const { DEFAULT_CATEGORIES } = require("../lib/knowledge.js");
 const { computeAssignPatch, getAssignRules, saveAssignRules } = require("../lib/assign.js");
 const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
 
-const redis = new Redis({
-  url: process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL,
-  token: process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN,
-});
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 

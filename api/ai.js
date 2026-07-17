@@ -9,15 +9,11 @@
    POST /api/ai {action:"summarize", num}        → выжимка переписки → task.aiSummary
    ============================================================ */
 
-const { Redis } = require("@upstash/redis");
+const redis = require("../lib/redisClient.js");
 const { chat, classifyTask, draftFromTask, summarizeThread } = require("../lib/ai.js");
 const { buildClientContext, getMemory, addMemory, getUsage, logUsage, getMonthlyCostUsd } = require("../lib/brain.js");
 const { CONSTITUTION, DEFAULT_CATEGORIES } = require("../lib/knowledge.js");
 
-const redis = new Redis({
-  url: process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL,
-  token: process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN,
-});
 
 const DEFAULT_SETTINGS = { classify: true, drafts: true, summarize: true, autoWork: false };
 

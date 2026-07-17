@@ -11,7 +11,7 @@
    ============================================================ */
 
 const { Bot, webhookCallback, InlineKeyboard } = require("grammy");
-const { Redis } = require("@upstash/redis");
+const redis = require("../lib/redisClient.js");
 const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
 
@@ -33,10 +33,6 @@ function timingSafeStringEqual(a, b) {
   try { return crypto.timingSafeEqual(bufA, bufB); } catch { return false; }
 }
 
-const redis = new Redis({
-  url: process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL,
-  token: process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN,
-});
 
 /* Триггер автономного ИИ-бухгалтера сразу после создания задачи через бота —
    зеркалит такой же вызов в api/crm.js. Сам /api/ai проверяет тублер

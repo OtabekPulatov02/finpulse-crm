@@ -13,15 +13,11 @@
          срабатывает только один раз, пока нет ни одного сотрудника)
    ============================================================ */
 
-const { Redis } = require("@upstash/redis");
+const redis = require("../lib/redisClient.js");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 
-const redis = new Redis({
-  url: process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL,
-  token: process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN,
-});
 
 const JWT_SECRET = process.env.JWT_SECRET || "";
 const TOKEN_TTL = "7d";
