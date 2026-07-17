@@ -57,6 +57,61 @@ async function triggerAutoWork(num, extraContext, aiqInfo) {
   } catch (e) { console.error("triggerAutoWork:", num, String(e).slice(0, 200)); }
 }
 
+/* Markdown (как его выдаёт модель — **bold**, `code`, "- пункт") → Telegram
+   HTML (тот же parse_mode, что используется во всём боте). Без этого ответ
+   ИИ показывался бы в группе с буквальными звёздочками — тот же пробел,
+   что раньше был в AI-чате CRM, но применительно к Telegram. Экранируем
+   HTML-спецсимволы ДО разбора markdown-разметки, чтобы не сломать теги. */
+function mdToTelegramHtml(text) {
+  const lines = String(text ?? "").split("\n");
+  return lines.map((line) => {
+    const trimmed = line.trimStart();
+    const isBullet = /^[-*]\s+/.test(trimmed);
+    const content = isBullet ? trimmed.replace(/^[-*]\s+/, "") : line;
+    let escaped = escapeHtml(content);
+    escaped = escaped.replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/`(.+?)`/g, "<code>$1</code>");
+    return (isBullet ? "• " : "") + escaped;
+  }).join("\n");
+}
+
+/* Прямое обращение к ИИ-агенту в группе бухгалтеров (/ask или упоминание
+   бота) — тот же агент с доступом к CRM/1С, что и AI-чат в CRM; диалог
+   заодно попадает в общую историю AI-чата (видно супер-админу там же). */
+async function askAiInGroup(ctx, query, msg) {
+  const JWT_SECRET = process.env.JWT_SECRET || process.env.CRM_JWT_SECRET || "";
+  if (!JWT_SECRET) {
+    await ctx.reply("ИИ временно недоступен (не настроен JWT_SECRET).", { reply_to_message_id: msg.message_id }).catch(() => {});
+    return;
+  }
+  const byName = [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(" ") || "Бухгалтер";
+  await ctx.replyWithChatAction("typing").catch(() => {});
+  let typingTimer = setInterval(() => ctx.replyWithChatAction("typing").catch(() => {}), 4000);
+  try {
+    const jwt = require("jsonwebtoken");
+    const token = jwt.sign({ role: "admin", name: `Telegram: ${byName}` }, JWT_SECRET, { algorithm: "HS256", expiresIn: "3m" });
+    const r = await fetch(`${AUTOWORK_API_ORIGIN}/api/ai`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      body: JSON.stringify({ action: "agent", messages: [{ role: "user", content: query }] }),
+      signal: AbortSignal.timeout(55000),
+    }).then((x) => x.json()).catch((e) => ({ ok: false, error: String(e).slice(0, 200) }));
+    clearInterval(typingTimer);
+
+    if (!r || !r.ok) {
+      await ctx.reply(`⚠️ Не удалось получить ответ от ИИ: ${escapeHtml((r && r.error) || "неизвестная ошибка")}`, { parse_mode: "HTML", reply_to_message_id: msg.message_id }).catch(() => {});
+      return;
+    }
+    const stepsLine = r.steps && r.steps.length
+      ? `<i>🔧 ${r.steps.map((s) => escapeHtml(s.tool)).join(", ")}</i>\n\n`
+      : "";
+    const body = mdToTelegramHtml(r.reply || "(пустой ответ)");
+    await sendLong(ctx, `🤖 <b>ИИ-бухгалтер</b> (${escapeHtml(byName)}):\n${stepsLine}${body}`, { parse_mode: "HTML", reply_to_message_id: msg.message_id });
+    try { await redis.lpush("logs:crm", JSON.stringify({ ts: new Date().toISOString(), event: "ai_ask_group", by: byName, query: query.slice(0, 200) })); await redis.ltrim("logs:crm", 0, 499); } catch (e) { /* noop */ }
+  } finally {
+    clearInterval(typingTimer);
+  }
+}
+
 /* Расставляет пробелы-разделители тысяч в суммах внутри произвольного
    текста ("1000000" -> "1 000 000") — в тексте задач и т.п. Идемпотентно,
    поэтому применяется прямо при сохранении, а не в каждом месте показа. */
@@ -1442,6 +1497,38 @@ bot.on("message", async (ctx) => {
   if (isGroup(ctx)) {
     const group = await redis.get("group");
     if (!group || ctx.chat.id !== Number(group)) return;
+
+    /* Прямое обращение к ИИ в группе — двумя способами:
+       1) команда "/ask <вопрос или поручение>"
+       2) упоминание бота "@username <вопрос или поручение>" в любом месте текста
+       Не завязано на reply — работает и как реплай (можно уточнить контекст,
+       ответив на карточку задачи или на другое сообщение), и как обычное
+       сообщение в группе. Использует тот же ИИ-агент (с доступом к CRM и 1С),
+       что и AI-чат в CRM — только супер-админ видит эти диалоги там же. */
+    const rawText = (msg.text || msg.caption || "").trim();
+    if (rawText) {
+      const botUsername = (bot.botInfo && bot.botInfo.username) || "";
+      const isBareAskCmd = /^\/ask(?:@\w+)?\s*$/i.test(rawText);
+      const askCmdMatch = /^\/ask(?:@\w+)?\s+([\s\S]+)/i.exec(rawText);
+      let askQuery = null;
+      if (askCmdMatch) {
+        askQuery = askCmdMatch[1].trim();
+      } else if (botUsername) {
+        const mentionRe = new RegExp("@" + botUsername.replace(/[.*+?^${}()|\[\]\\]/g, "\\$&"), "i");
+        if (mentionRe.test(rawText)) {
+          askQuery = rawText.replace(mentionRe, "").trim();
+        }
+      }
+      if (isBareAskCmd || (askQuery !== null && !askQuery)) {
+        await ctx.reply("Напишите вопрос или поручение после /ask (или после упоминания бота).", { reply_to_message_id: msg.message_id }).catch(() => {});
+        return;
+      }
+      if (askQuery) {
+        await askAiInGroup(ctx, askQuery, msg).catch((e) => console.error("askAiInGroup:", String(e).slice(0, 200)));
+        return;
+      }
+    }
+
     if (!msg.reply_to_message) return;
 
     /* --- Ответ бухгалтера на уточняющий вопрос ИИ-бухгалтера (reply на
