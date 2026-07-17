@@ -1352,6 +1352,17 @@ module.exports = async (req, res) => {
       if (q.r === "tariffs") {
         return res.status(200).json({ ok: true, tariffs: await getTariffs() });
       }
+      if (q.r === "dicts") {
+        if (!isStaff) return res.status(403).json({ ok: false, error: "forbidden" });
+        const def = {
+          calendarEventTypes: ["Налоги и отчёты", "Платежи фирм", "Задачи"],
+          paymentCategories: ["Аренда", "Интернет и связь", "Коммунальные услуги", "Лизинг", "Страховка"],
+          reminderIntervals: ["В день события", "За 1 день", "За 3 дня", "За неделю"],
+          repeatPeriods: ["Однократно", "Ежедневно", "Ежемесячно", "Ежеквартально", "Ежегодно"],
+        };
+        const cur = (await redis.get("dicts:custom")) || {};
+        return res.status(200).json({ ok: true, dicts: { ...def, ...cur } });
+      }
       if (q.r === "usage") {
         if (!isStaff) return res.status(403).json({ ok: false, error: "forbidden" });
         const [all, tasksAll, tariffs] = await Promise.all([listClients(), listTasks(), getTariffs()]);
@@ -1469,7 +1480,7 @@ module.exports = async (req, res) => {
         }
         return res.status(200).json({ ok: true, events });
       }
-      return res.status(200).json({ ok: true, service: "Finpulse CRM API", routes: ["ping", "tasks", "logs", "pending", "clients", "client", "calendar", "calendar_events", "employees"] });
+      return res.status(200).json({ ok: true, service: "Finpulse CRM API", routes: ["ping", "tasks", "logs", "pending", "clients", "client", "calendar", "calendar_events", "employees", "tariffs", "dicts", "notif_settings", "bot_settings", "bot_categories", "bot_positions"] });
     }
 
     if (req.method === "POST") {
@@ -1560,6 +1571,22 @@ module.exports = async (req, res) => {
         await redis.set("tariffs", clean);
         await logEvent("crm", "tariffs_updated", { count: clean.length, by: (authUser && authUser.name) || "CRM" });
         return res.status(200).json({ ok: true, tariffs: clean });
+      }
+      if (body && body.action === "dicts_save" && body.dicts) {
+        const isAdmin = !rolesEnforced || (authUser && authUser.role === "admin");
+        if (!isAdmin) return res.status(403).json({ ok: false, error: "admin only" });
+        const d = body.dicts;
+        const cleanList = (arr, max) =>
+          Array.isArray(arr) ? arr.map((x) => String(x).trim().slice(0, 60)).filter(Boolean).slice(0, max) : [];
+        const clean = {
+          calendarEventTypes: cleanList(d.calendarEventTypes, 20),
+          paymentCategories: cleanList(d.paymentCategories, 30),
+          reminderIntervals: cleanList(d.reminderIntervals, 15),
+          repeatPeriods: cleanList(d.repeatPeriods, 10),
+        };
+        await redis.set("dicts:custom", clean);
+        await logEvent("crm", "dicts_updated", { by: (authUser && authUser.name) || "CRM" });
+        return res.status(200).json({ ok: true, dicts: clean });
       }
       if (body && body.action === "ops_pack_add" && body.clientId) {
         if (!isStaff) return res.status(403).json({ ok: false, error: "forbidden" });

@@ -1201,6 +1201,18 @@ module.exports = async (req, res) => {
 
     if (req.method === "GET") {
       if (q.r === "apps") return res.status(200).json({ ok: true, apps });
+      if (q.r === "dept_summary") {
+        /* Лёгкая сводка по синканным подразделениям для раздела "Справочники"
+           в CRM — без живого похода в 1С, только то, что уже закешировано
+           последним sync_departments (см. syncDepartments выше). */
+        const rows = await Promise.all(
+          apps.map(async (a) => {
+            const list = (await redis.get("1c:deptlist:" + a.path)) || [];
+            return { code: a.code, name: a.name, count: Array.isArray(list) ? list.length : 0, items: Array.isArray(list) ? list.slice(0, 50).map((d) => d.name) : [] };
+          })
+        );
+        return res.status(200).json({ ok: true, bases: rows });
+      }
       if (q.r === "ping") return res.status(200).json({ ok: true, apps: await pingAll() });
       if (q.r === "meta" && q.app) {
         const a = findApp(q.app);
