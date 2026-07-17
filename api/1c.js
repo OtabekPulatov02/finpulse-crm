@@ -1234,6 +1234,17 @@ module.exports = async (req, res) => {
         if (!r.ok) return res.status(200).json(r);
         return res.status(200).json({ ok: true, count: r.positions.length, sample: r.positions.slice(0, 3) });
       }
+      if (q.r === "vacmeta" && q.app) {
+        const a = findApp(q.app);
+        if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
+        const url = `${BASE}${a.path}/odata/standard.odata/$metadata`;
+        const r = await fetch(url, { headers: { Authorization: authHeader() }, signal: AbortSignal.timeout(20000) });
+        const text = await r.text();
+        const idx = text.indexOf('EntityType Name="Document_Отпуск"');
+        const chunk = idx >= 0 ? text.slice(idx, idx + 6000) : "";
+        const props = [...chunk.matchAll(/<Property Name="([^"]+)"\s+Type="([^"]+)"[^>]*Nullable="([^"]+)"/g)].map(m => `${m[1]}:${m[2]}:nullable=${m[3]}`);
+        return res.status(200).json({ ok: true, props });
+      }
       if (q.r === "vacdbg" && q.app) {
         const a = findApp(q.app);
         if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
