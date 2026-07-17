@@ -1081,6 +1081,8 @@ async function deleteTask(num, actor) {
   return { ok: true, num };
 }
 
+const STATUS_RU_LABELS = { new: "Новая", in_progress: "В работе", done: "Выполнена", cancelled: "Отменена" };
+
 async function updateStatus(num, status, assignee) {
   const task = await redis.get("task:" + num);
   if (!task) return { ok: false, error: "task not found" };
@@ -1089,6 +1091,29 @@ async function updateStatus(num, status, assignee) {
   if (status === "in_progress") task.assignee = assignee || task.assignee || "CRM";
   if (status === "done") task.doneAt = new Date().toISOString();
   else if (prev === "done" && status !== "done") task.doneAt = null; // вернули в работу — снимаем метку архивации
+
+  /* Автоматическая запись в ленту задачи, когда статус меняет ИИ (assignee ===
+     "AI-бухгалтер") — независимо от того, какой конкретно код это вызвал
+     (автономный auto_work, /ask в группе, AI-чат в CRM). Раньше запись в
+     ленту (pushThreadEntry) делали только reportExecSuccess/reportExecBlocked
+     внутри runAutoWork, поэтому задачи, которые ИИ обрабатывал через обычный
+     agent-чат (без прохождения через auto_work), оставались с пустой лентой —
+     это и было причиной "пропавшей" истории. Логируем здесь, в одном месте,
+     через которое проходят вообще все изменения статуса, чтобы лента больше
+     никогда не оставалась пустой независимо от пути вызова. */
+  if (prev !== status && assignee === "AI-бухгалтер") {
+    task.thread = Array.isArray(task.thread) ? task.thread : [];
+    task.thread.push({
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      at: new Date().toISOString(),
+      from: "staff",
+      by: "AI-бухгалтер",
+      text: `🤖 Статус изменён: «${STATUS_RU_LABELS[prev] || prev}» → «${STATUS_RU_LABELS[status] || status}»`,
+      fileIndex: null,
+    });
+    if (task.thread.length > 200) task.thread = task.thread.slice(-200);
+  }
+
   await redis.set("task:" + num, task);
   await logEvent("crm", "status_changed", {
     num, from: prev, to: status,
