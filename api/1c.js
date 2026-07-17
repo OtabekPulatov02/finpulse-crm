@@ -1234,6 +1234,12 @@ module.exports = async (req, res) => {
         if (!r.ok) return res.status(200).json(r);
         return res.status(200).json({ ok: true, count: r.positions.length, sample: r.positions.slice(0, 3) });
       }
+      if (q.r === "vacsample" && q.app) {
+        const a = findApp(q.app);
+        if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
+        const r = await odata(a.path, "Document_Отпуск", "$format=json&$top=1");
+        return res.status(200).json({ ok: true, status: r.status, sample: r.json?.value?.[0] || null });
+      }
       if (q.r === "vacmeta" && q.app) {
         const a = findApp(q.app);
         if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
