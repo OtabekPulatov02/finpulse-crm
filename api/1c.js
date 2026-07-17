@@ -1234,6 +1234,20 @@ module.exports = async (req, res) => {
         if (!r.ok) return res.status(200).json(r);
         return res.status(200).json({ ok: true, count: r.positions.length, sample: r.positions.slice(0, 3) });
       }
+      if (q.r === "vacdbg" && q.app) {
+        const a = findApp(q.app);
+        if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
+        const getR = await odata(a.path, "Document_Отпуск", "$format=json&$top=1");
+        const url = `${BASE}${a.path}/odata/standard.odata/Document_Отпуск?$format=json`;
+        const postR = await fetch(url, {
+          method: "POST",
+          headers: { Authorization: authHeader(), Accept: "application/json", "Content-Type": "application/json" },
+          body: JSON.stringify({ Posted: false }),
+          signal: AbortSignal.timeout(20000),
+        });
+        const postText = await postR.text();
+        return res.status(200).json({ ok: true, getStatus: getR.status, getSample: getR.json ? (getR.json.value||[]).length : null, postStatus: postR.status, postBody: postText.slice(0, 600) });
+      }
       if (q.r === "departments" && q.app) {
         const a = findApp(q.app);
         if (!a) return res.status(200).json({ ok: false, error: "unknown app" });
