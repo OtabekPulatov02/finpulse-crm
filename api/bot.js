@@ -1048,6 +1048,42 @@ bot.callbackQuery("fb:noop", async (ctx) => {
   await ctx.answerCallbackQuery().catch(() => {});
 });
 
+/* ---------------- NPS после закрытия задачи ---------------- */
+bot.callbackQuery(/^nps:(\d+):(\d)$/, async (ctx) => {
+  const num = Number(ctx.match[1]);
+  const rating = Number(ctx.match[2]);
+  const month = new Date().toISOString().slice(0, 7);
+  try {
+    const already = await redis.get("nps:task:" + num);
+    if (already) {
+      await ctx.answerCallbackQuery("Спасибо, вы уже оценили эту задачу 🙌").catch(() => {});
+      return;
+    }
+    await redis.set("nps:task:" + num, rating);
+    await redis.rpush("nps:" + month, JSON.stringify({
+      num, rating,
+      by: ctx.from?.username || ctx.from?.first_name || String(ctx.from?.id || ""),
+      ts: new Date().toISOString(),
+    }));
+    await redis.expire("nps:" + month, 60 * 60 * 24 * 400);
+    await redis.incrby(`nps:${month}:sum`, rating);
+    await redis.incrby(`nps:${month}:count`, 1);
+    await redis.expire(`nps:${month}:sum`, 60 * 60 * 24 * 400);
+    await redis.expire(`nps:${month}:count`, 60 * 60 * 24 * 400);
+  } catch (e) { console.error("nps rate:", String(e).slice(0, 200)); }
+  const stars = "⭐".repeat(rating) + "☆".repeat(5 - rating);
+  await ctx.answerCallbackQuery("Спасибо за оценку! 🙏").catch(() => {});
+  try {
+    await ctx.editMessageReplyMarkup({
+      reply_markup: { inline_keyboard: [[{ text: `Оценено: ${stars}`, callback_data: "nps:noop" }]] },
+    });
+  } catch (e) { /* сообщение могло уже смениться — не критично */ }
+});
+
+bot.callbackQuery("nps:noop", async (ctx) => {
+  await ctx.answerCallbackQuery().catch(() => {});
+});
+
 bot.callbackQuery(/^lang:(ru|uz|en)$/, async (ctx) => {
   const lang = ctx.match[1];
   const u = (await getUser(ctx.from.id)) || {};
@@ -1528,6 +1564,20 @@ bot.on("business_message", async (ctx) => {
 /* ---------------- Сообщения ---------------- */
 bot.on("message", async (ctx) => {
   const msg = ctx.message;
+
+  /* --- Голосовое сообщение (клиент наговорил заявку) --- транскрибируем
+     через Whisper и подставляем результат как обычный msg.text, дальше
+     сообщение обрабатывается по тому же пути, что и текст/файлы (сама
+     аудиозапись тоже прикладывается как файл через extractFile ниже). */
+  if (msg.voice && !msg.text && !msg.caption) {
+    try {
+      const { transcribeVoiceMessage } = require("../lib/whisper.js");
+      const text = await transcribeVoiceMessage(bot.api, msg.voice.file_id);
+      if (text) msg.text = text;
+    } catch (e) {
+      console.error("whisper transcribe:", String(e).slice(0, 300));
+    }
+  }
 
   /* --- Группа: ответ бухгалтера на карточку задачи → клиенту --- */
   if (isGroup(ctx)) {

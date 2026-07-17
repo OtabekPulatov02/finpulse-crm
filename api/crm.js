@@ -1099,6 +1099,17 @@ async function deleteTask(num, actor) {
 
 const STATUS_RU_LABELS = { new: "Новая", in_progress: "В работе", done: "Выполнена", cancelled: "Отменена" };
 
+/* ---------------- NPS после закрытия задачи ---------------- */
+const NPS_TEXT = {
+  ru: (num) => `Оцените, пожалуйста, как мы справились с задачей №${num} — от 1 до 5:`,
+  uz: (num) => `Iltimos, №${num} vazifa bo'yicha ishimizni 1 dan 5 gacha baholang:`,
+  en: (num) => `Please rate how we handled task #${num} — from 1 to 5:`,
+};
+async function npsAsk(chatId, num, lang) {
+  const kb = { inline_keyboard: [[1, 2, 3, 4, 5].map((n) => ({ text: String(n), callback_data: `nps:${num}:${n}` }))] };
+  await tg("sendMessage", { chat_id: chatId, text: NPS_TEXT[lang] ? NPS_TEXT[lang](num) : NPS_TEXT.ru(num), reply_markup: kb });
+}
+
 async function updateStatus(num, status, assignee) {
   const task = await redis.get("task:" + num);
   if (!task) return { ok: false, error: "task not found" };
@@ -1169,7 +1180,14 @@ async function updateStatus(num, status, assignee) {
             : status === "cancelled" ? m.cancelled(num)
             : status === "in_progress" ? m.assigned(num, task.assignee || "бухгалтер")
             : m.reopened(num);
-          return await tg("sendMessage", { chat_id: task.client, text });
+          const sent = await tg("sendMessage", { chat_id: task.client, text });
+          /* NPS после закрытия задачи (#14 из бэклога) — отдельным сообщением
+             с оценкой 1–5, независимо от основного текста закрытия (если
+             опрос не уйдёт, это не должно ломать уведомление о закрытии). */
+          if (status === "done") {
+            void npsAsk(task.client, num, (u && u.lang) || "ru").catch(() => {});
+          }
+          return sent;
         } catch (e) { return null; }
       })()
     : Promise.resolve(null);
@@ -1407,6 +1425,23 @@ module.exports = async (req, res) => {
         if (!isStaff) return res.status(403).json({ ok: false, error: "forbidden" });
         return res.status(200).json({ ok: true, requests: await listAccessRequests() });
       }
+      if (q.r === "nps_stats") {
+        if (!isStaff) return res.status(403).json({ ok: false, error: "forbidden" });
+        const now = new Date();
+        const months = [];
+        for (let i = 0; i < 6; i++) {
+          const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+          months.push(d.toISOString().slice(0, 7));
+        }
+        const pairs = await Promise.all(months.map(async (m) => {
+          const [sum, count] = await Promise.all([
+            redis.get(`nps:${m}:sum`), redis.get(`nps:${m}:count`),
+          ]);
+          const c = Number(count || 0);
+          return { month: m, count: c, avg: c ? Number((Number(sum || 0) / c).toFixed(2)) : null };
+        }));
+        return res.status(200).json({ ok: true, months: pairs });
+      }
       if (q.r === "pending") {
         if (!isStaff) return res.status(403).json({ ok: false, error: "forbidden" });
         const rows = (await redis.lrange("pending_clients", 0, 49)) || [];
@@ -1443,6 +1478,28 @@ module.exports = async (req, res) => {
         }
         const isAdmin = !rolesEnforced || authUser.role === "admin";
         return res.status(200).json({ ok: true, client: (isAdmin ? fullClient : safeClient)(c) });
+      }
+      if (q.r === "client_balance") {
+        /* Клиентский мини-дашборд (остаток/долги из 1С) — задача #13.
+           Клиент видит только СВОЮ компанию: берём company либо из его
+           JWT (роль client), либо, для admin/accountant, из q.company —
+           так этим же эндпоинтом можно посмотреть баланс любого клиента
+           из карточки в CRM. */
+        if (rolesEnforced && authUser.role === "guest") {
+          return res.status(200).json({ ok: true, demo: true, receivables: null, cash: null });
+        }
+        const company = rolesEnforced && authUser.role === "client" ? authUser.company : (q.company || (rolesEnforced ? authUser.company : ""));
+        if (!company) return res.status(200).json({ ok: false, error: "company required" });
+        const org = await redis.get("1c:orgmap:" + normCompany(company));
+        if (!org || !org.app || !org.ref) {
+          return res.status(200).json({ ok: false, error: "Компания ещё не сопоставлена с организацией в 1С — синхронизируйте организации на странице «1С»." });
+        }
+        const { getClientReceivables, getCashEstimate } = require("../lib/balance.js");
+        const [receivables, cash] = await Promise.all([
+          getClientReceivables(org.app, org.ref).catch((e) => ({ ok: false, error: String(e).slice(0, 200) })),
+          getCashEstimate(org.app).catch((e) => ({ ok: false, error: String(e).slice(0, 200) })),
+        ]);
+        return res.status(200).json({ ok: true, company: org.name, receivables, cash });
       }
       if (q.r === "calendar") {
         if (rolesEnforced && authUser.role === "guest") {

@@ -67,7 +67,8 @@ onec_post: {action:"sync_orgs", app} | {action:"sync_counterparties", app} | {ac
 2. Деструктивные действия (delete, сброс пароля, массовые изменения) — только после явного подтверждения в диалоге. Если его нет — опиши, что собираешься сделать, и спроси.
 3. Отвечай кратко, по-русски, с итогом что сделано. Числа/суммы — как в данных.
 4. Если данных нет или API вернул ошибку — скажи честно.
-5. Если поручение неоднозначно (неясно какую задачу/клиента/тип документа/сумму имеют в виду, или это заметно влияющее действие — создание документа в 1С, изменение статуса, удаление, массовая операция) — НЕ угадывай и НЕ выполняй сразу. Вызови ask_user с коротким вопросом и 2-4 конкретными вариантами ответа (пользователь всегда может вместо кнопки написать свой вариант текстом — это встроено в интерфейс, отдельный вариант "другое" добавлять не нужно). После ask_user сразу останавливайся и жди ответа пользователя следующим сообщением — не вызывай другие инструменты в этом же ответе.`;
+5. Если поручение неоднозначно (неясно какую задачу/клиента/тип документа/сумму имеют в виду, или это заметно влияющее действие — создание документа в 1С, изменение статуса, удаление, массовая операция) — НЕ угадывай и НЕ выполняй сразу. Вызови ask_user с коротким вопросом и 2-4 конкретными вариантами ответа (пользователь всегда может вместо кнопки написать свой вариант текстом — это встроено в интерфейс, отдельный вариант "другое" добавлять не нужно). После ask_user сразу останавливайся и жди ответа пользователя следующим сообщением — не вызывай другие инструменты в этом же ответе.
+6. По вопросам учёта/налогов/регламентов УЗ, где в базе знаний Finpulse (kb_search) может быть проверенный бухгалтером ответ — сначала вызови kb_search, и если найдётся релевантная запись, основывай ответ на ней и явно скажи, что это проверенный ответ из базы знаний Finpulse (не общие рассуждения). Если ничего релевантного не нашлось — отвечай как обычно, но не выдумывай ссылку на несуществующую запись базы знаний.`;
 
 const AGENT_TOOLS = [
   { type: "function", function: { name: "crm_get", description: "GET-запрос к /api/crm. Аргумент query — строка после ?, напр. \"r=tasks\"", parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } } },
@@ -78,6 +79,7 @@ const AGENT_TOOLS = [
   { type: "function", function: { name: "memory_get", description: "Долгосрочная память по компании клиента (факты).", parameters: { type: "object", properties: { company: { type: "string" } }, required: ["company"] } } },
   { type: "function", function: { name: "memory_add", description: "Записать устойчивый факт о компании в память (аренда, банк, договорённости).", parameters: { type: "object", properties: { company: { type: "string" }, fact: { type: "string" } }, required: ["company", "fact"] } } },
   { type: "function", function: { name: "ask_user", description: "Задать уточняющий вопрос пользователю ПЕРЕД выполнением неоднозначного или значимого действия (создание документа в 1С, изменение статуса, удаление, массовая операция и т.п.). Останавливает выполнение до ответа пользователя.", parameters: { type: "object", properties: { question: { type: "string" }, options: { type: "array", items: { type: "string" }, description: "2-4 коротких конкретных варианта ответа" } }, required: ["question", "options"] } } },
+  { type: "function", function: { name: "kb_search", description: "Поиск по базе знаний Finpulse — проверенные бухгалтерами ответы и регламенты (не общие знания модели). Вызывай ПЕРЕД тем, как отвечать на вопросы по учёту/налогам/регламентам УЗ своими словами — если найдётся релевантная запись, цитируй её и укажи, что это проверенный ответ из базы знаний, а не общее рассуждение.", parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } } },
 ];
 
 async function callTool(name, args, authHeaders) {
@@ -183,6 +185,12 @@ async function runAgent(messages, authHeaders) {
       } else if (tc.function.name === "memory_add") {
         const added = await addMemory(redis, String(args.company || ""), String(args.fact || ""), "AI-агент");
         result = JSON.stringify({ ok: added });
+      } else if (tc.function.name === "kb_search") {
+        try {
+          const { search } = require("../lib/rag.js");
+          const hits = await search(redis, String(args.query || ""), 3);
+          result = JSON.stringify({ ok: true, results: hits.map((h) => ({ title: h.title, content: h.content, score: Number(h.score.toFixed(3)) })) });
+        } catch (e) { result = JSON.stringify({ ok: false, error: String(e).slice(0, 200) }); }
       } else if (tc.function.name === "ai_draft") {
         try {
           const task = await redis.get("task:" + Number(args.num));
@@ -736,6 +744,10 @@ module.exports = async (req, res) => {
         const cur = (await redis.get("ai:settings")) || {};
         return res.status(200).json({ ok: true, settings: { ...DEFAULT_SETTINGS, ...cur }, key: hasKey });
       }
+      if (q.r === "rag_list") {
+        const { listDocs } = require("../lib/rag.js");
+        return res.status(200).json({ ok: true, docs: await listDocs(redis) });
+      }
       return res.status(200).json({ ok: true, service: "Finpulse AI", routes: ["ping", "settings"] });
     }
 
@@ -787,7 +799,25 @@ module.exports = async (req, res) => {
         return res.status(200).json({ ok: true, settings: clean });
       }
 
+      if (body && body.action === "rag_delete" && body.id) {
+        const { deleteDoc } = require("../lib/rag.js");
+        await deleteDoc(redis, String(body.id));
+        await logEvent("rag_doc_deleted", { id: body.id, by: actor });
+        return res.status(200).json({ ok: true });
+      }
+
       if (!hasKey) return res.status(200).json({ ok: false, error: "OPENAI_API_KEY не задан" });
+
+      if (body && body.action === "rag_add" && body.title && body.content) {
+        const { addDoc } = require("../lib/rag.js");
+        try {
+          const doc = await addDoc(redis, { title: body.title, content: body.content, tags: body.tags, by: actor });
+          await logEvent("rag_doc_added", { id: doc.id, title: doc.title, by: actor });
+          return res.status(200).json({ ok: true, doc });
+        } catch (e) {
+          return res.status(200).json({ ok: false, error: String(e).slice(0, 300) });
+        }
+      }
 
       if (body && body.action === "classify" && body.text) {
         const saved = (await redis.get("bot:categories")) || [];
