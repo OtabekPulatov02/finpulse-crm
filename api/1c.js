@@ -1258,13 +1258,19 @@ module.exports = async (req, res) => {
         const empR = await odata(a.path, "Catalog_Сотрудники", "$format=json&$top=1&$select=Ref_Key,Description,ФизическоеЛицо_Key");
         const org = orgR.json?.value?.[0];
         const emp = empR.json?.value?.[0];
+        const startDate = "2026-08-03T00:00:00";
+        const endDate = "2026-08-07T00:00:00";
         const payload = {
           Date: new Date().toISOString().slice(0, 19),
+          "ВидОперации": "Отпуск",
           "Организация_Key": org?.Ref_Key,
           "Сотрудник_Key": emp?.Ref_Key,
           "ФизическоеЛицо_Key": emp?.["ФизическоеЛицо_Key"],
-          "ДатаНачалаОсновногоОтпуска": new Date().toISOString().slice(0, 19),
+          "ДатаНачалаОсновногоОтпуска": startDate,
+          "ДатаОкончанияОсновногоОтпуска": endDate,
           "КоличествоДнейОсновногоОтпуска": 5,
+          "ДатаНачалаСобытия": startDate,
+          "Основание": "Заявление",
           Posted: false,
         };
         const url = `${BASE}${a.path}/odata/standard.odata/Document_Отпуск?$format=json`;
