@@ -87,7 +87,7 @@ const AGENT_TOOLS = [
   { type: "function", function: { name: "memory_add", description: "Записать устойчивый факт о компании в память (аренда, банк, договорённости).", parameters: { type: "object", properties: { company: { type: "string" }, fact: { type: "string" } }, required: ["company", "fact"] } } },
   { type: "function", function: { name: "ask_user", description: "Задать уточняющий вопрос пользователю ПЕРЕД выполнением неоднозначного или значимого действия (создание документа в 1С, изменение статуса, удаление, массовая операция и т.п.). Останавливает выполнение до ответа пользователя.", parameters: { type: "object", properties: { question: { type: "string" }, options: { type: "array", items: { type: "string" }, description: "2-4 коротких конкретных варианта ответа" } }, required: ["question", "options"] } } },
   { type: "function", function: { name: "kb_search", description: "Поиск по базе знаний Finpulse — проверенные бухгалтерами ответы и регламенты (не общие знания модели). Вызывай ПЕРЕД тем, как отвечать на вопросы по учёту/налогам/регламентам УЗ своими словами — если найдётся релевантная запись, цитируй её и укажи, что это проверенный ответ из базы знаний, а не общее рассуждение.", parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } } },
-  { type: "function", function: { name: "draft_contract", description: "Интеллектуальный выбор шаблона документа (договор/доверенность-текст/доп.соглашение) + автозаполнение реквизитов + рендер черновика. Вызови БЕЗ templateId сначала, чтобы получить список шаблонов и smart-подсказку по истории клиента. Затем с templateId и fields (без confirm), чтобы получить filled/missing. Затем с confirm:true и полным набором fields, чтобы сохранить готовый черновик в ленту задачи.", parameters: { type: "object", properties: { num: { type: "number", description: "номер задачи CRM" }, templateId: { type: "string" }, fields: { type: "object", description: "известные значения плейсхолдеров шаблона, напр. {subject, amount, term}" }, confirm: { type: "boolean" } }, required: ["num"] } } },
+  { type: "function", function: { name: "draft_contract", description: "Интеллектуальный выбор шаблона документа (договор/доверенность-текст/доп.соглашение) + автозаполнение реквизитов + рендер черновика. Можно вызвать БЕЗ num и БЕЗ templateId — просто чтобы получить список доступных шаблонов (например, если пользователь ещё не назвал задачу). Если известен num — дополнительно вернётся smart-подсказка по истории конкретного клиента. Для автозаполнения реквизитов, проверки заполненности и сохранения черновика в ленту задачи num обязателен. Вызови с templateId и fields (без confirm), чтобы получить filled/missing. Затем с confirm:true и полным набором fields, чтобы сохранить готовый черновик в ленту задачи.", parameters: { type: "object", properties: { num: { type: "number", description: "номер задачи CRM (не обязателен только для простого списка шаблонов без templateId)" }, templateId: { type: "string" }, fields: { type: "object", description: "известные значения плейсхолдеров шаблона, напр. {subject, amount, term}" }, confirm: { type: "boolean" } } } } },
 ];
 
 async function callTool(name, args, authHeaders) {
@@ -219,28 +219,41 @@ async function runAgent(messages, authHeaders) {
         } catch (e) { result = JSON.stringify({ ok: false, error: String(e).slice(0, 200) }); }
       } else if (tc.function.name === "draft_contract") {
         try {
-          const num = Number(args.num);
-          const task = await redis.get("task:" + num);
-          if (!task) { result = JSON.stringify({ ok: false, error: "task not found" }); }
+          /* num нужен ТОЛЬКО когда реально заполняем/сохраняем черновик по
+             конкретной задаче (нужны данные компании и куда сохранить
+             результат) — сам список шаблонов и smart-подсказку по компании
+             можно получить и без привязки к задаче (например, в общем
+             AI-чате CRM спросили "какие есть шаблоны договоров"). Раньше
+             tool требовал существующую задачу даже для простого списка —
+             из-за этого агент не мог ответить, если пользователь ещё не
+             назвал номер задачи. */
+          const num = args.num != null ? Number(args.num) : null;
+          const task = num ? await redis.get("task:" + num) : null;
+          if (num && !task) { result = JSON.stringify({ ok: false, error: "task not found" }); }
           else {
             const {
               listTemplates, getTemplate, suggestTemplateForClient, autofillFromClient,
               missingRequired, renderTemplate, nextContractNumber, recordTemplateUsage,
             } = require("../lib/docTemplates.js");
             let clientInfo = null;
-            try {
-              const cid = await redis.get("clientcompany:" + String(task.company || "").toLowerCase().replace(/[^a-zа-яё0-9]+/gi, " ").trim());
-              if (cid) clientInfo = await redis.get("client:" + cid);
-            } catch (e) { /* noop */ }
+            if (task) {
+              try {
+                const cid = await redis.get("clientcompany:" + String(task.company || "").toLowerCase().replace(/[^a-zа-яё0-9]+/gi, " ").trim());
+                if (cid) clientInfo = await redis.get("client:" + cid);
+              } catch (e) { /* noop */ }
+            }
 
             if (!args.templateId) {
               const templates = await listTemplates(redis);
-              const suggested = await suggestTemplateForClient(redis, task.company);
+              const suggested = task ? await suggestTemplateForClient(redis, task.company) : null;
               result = JSON.stringify({
                 ok: true,
                 templates: templates.map((t) => ({ id: t.id, name: t.name, category: t.category, requiredFields: t.requiredFields })),
                 suggested,
+                note: task ? undefined : "num не передан — это только список шаблонов и общая справка; для автозаполнения реквизитов, подсказки по истории клиента и сохранения черновика нужен номер задачи (num)",
               });
+            } else if (!task) {
+              result = JSON.stringify({ ok: false, error: "для этого шага нужен номер задачи (num) — без неё нельзя ни автозаполнить реквизиты компании, ни сохранить черновик" });
             } else {
               const tpl = await getTemplate(redis, String(args.templateId));
               if (!tpl) { result = JSON.stringify({ ok: false, error: "template not found" }); }
