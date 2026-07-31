@@ -68,7 +68,14 @@ onec_post: {action:"sync_orgs", app} | {action:"sync_counterparties", app} | {ac
 3. Отвечай кратко, по-русски, с итогом что сделано. Числа/суммы — как в данных.
 4. Если данных нет или API вернул ошибку — скажи честно.
 5. Если поручение неоднозначно (неясно какую задачу/клиента/тип документа/сумму имеют в виду, или это заметно влияющее действие — создание документа в 1С, изменение статуса, удаление, массовая операция) — НЕ угадывай и НЕ выполняй сразу. Вызови ask_user с коротким вопросом и 2-4 конкретными вариантами ответа (пользователь всегда может вместо кнопки написать свой вариант текстом — это встроено в интерфейс, отдельный вариант "другое" добавлять не нужно). После ask_user сразу останавливайся и жди ответа пользователя следующим сообщением — не вызывай другие инструменты в этом же ответе.
-6. По вопросам учёта/налогов/регламентов УЗ, где в базе знаний Finpulse (kb_search) может быть проверенный бухгалтером ответ — сначала вызови kb_search, и если найдётся релевантная запись, основывай ответ на ней и явно скажи, что это проверенный ответ из базы знаний Finpulse (не общие рассуждения). Если ничего релевантного не нашлось — отвечай как обычно, но не выдумывай ссылку на несуществующую запись базы знаний.`;
+6. По вопросам учёта/налогов/регламентов УЗ, где в базе знаний Finpulse (kb_search) может быть проверенный бухгалтером ответ — сначала вызови kb_search, и если найдётся релевантная запись, основывай ответ на ней и явно скажи, что это проверенный ответ из базы знаний Finpulse (не общие рассуждения). Если ничего релевантного не нашлось — отвечай как обычно, но не выдумывай ссылку на несуществующую запись базы знаний.
+7. Интеллектуальный выбор шаблона документа (roadmap "AI-главный бухгалтер"): если поручение про ДОГОВОР/доверенность-как-текст/доп.соглашение/письмо (юридический документ, а НЕ бухгалтерская проводка из execute_task) — используй инструмент draft_contract, а не execute_task. Пайплайн:
+   a) Вызови draft_contract{num} без templateId. В ответе придёт templates (список всех шаблонов) и suggested (наиболее часто использованный этой компанией шаблон, если уже были договоры раньше, иначе null).
+   b) Выбор шаблона: если из текста задачи ОДНОЗНАЧНО следует, какой шаблон нужен (например прямо назван тип договора) — используй его. Иначе, если есть suggested — спроси через ask_user "Использовать шаблон «<suggested.name>»?" с вариантами вида ["Да", "Выбрать другой"]; если suggested нет — сразу вызови ask_user со списком названий из templates. Никогда не выбирай шаблон молча, если он не следует явно из текста и нет suggested.
+   c) Когда шаблон определён, сам извлеки из текста задачи все поля, которые в нём упоминаются (например subject/amount/term — предмет/сумму/срок), и вызови draft_contract{num, templateId, fields:{...то, что вытащил из текста}} — БЕЗ confirm. В ответе придут filled (автозаполненные из 1С/CRM реквизиты организации/контрагента) и missing (что осталось неизвестным из requiredFields шаблона).
+   d) Если missing непустой — вызови ask_user и спроси ТОЛЬКО про поля из missing, одним вопросом с перечислением (не спрашивай то, что уже есть в filled или что ты уже извлёк из текста). Если missing пустой — сразу переходи к финалу.
+   e) Финал: вызови draft_contract{num, templateId, fields:{...все filled + все свои + всё, что ответил пользователь}, confirm:true} — это сохранит готовый черновик документа в ленту задачи (task.thread) и запомнит выбор шаблона для этого клиента (для будущих smart-подсказок). После этого вызови crm_post {action:"task_message_send", num, text:"<кратко: какой документ подготовлен>"} и статус в "in_progress", как в пайплайне execute_task выше.
+   Черновик договора — это ТЕКСТ для проверки бухгалтером/юристом перед отправкой контрагенту, а не проведённый в 1С документ — всегда явно говори пользователю, что это черновик и нужна проверка.`;
 
 const AGENT_TOOLS = [
   { type: "function", function: { name: "crm_get", description: "GET-запрос к /api/crm. Аргумент query — строка после ?, напр. \"r=tasks\"", parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } } },
@@ -80,6 +87,7 @@ const AGENT_TOOLS = [
   { type: "function", function: { name: "memory_add", description: "Записать устойчивый факт о компании в память (аренда, банк, договорённости).", parameters: { type: "object", properties: { company: { type: "string" }, fact: { type: "string" } }, required: ["company", "fact"] } } },
   { type: "function", function: { name: "ask_user", description: "Задать уточняющий вопрос пользователю ПЕРЕД выполнением неоднозначного или значимого действия (создание документа в 1С, изменение статуса, удаление, массовая операция и т.п.). Останавливает выполнение до ответа пользователя.", parameters: { type: "object", properties: { question: { type: "string" }, options: { type: "array", items: { type: "string" }, description: "2-4 коротких конкретных варианта ответа" } }, required: ["question", "options"] } } },
   { type: "function", function: { name: "kb_search", description: "Поиск по базе знаний Finpulse — проверенные бухгалтерами ответы и регламенты (не общие знания модели). Вызывай ПЕРЕД тем, как отвечать на вопросы по учёту/налогам/регламентам УЗ своими словами — если найдётся релевантная запись, цитируй её и укажи, что это проверенный ответ из базы знаний, а не общее рассуждение.", parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } } },
+  { type: "function", function: { name: "draft_contract", description: "Интеллектуальный выбор шаблона документа (договор/доверенность-текст/доп.соглашение) + автозаполнение реквизитов + рендер черновика. Вызови БЕЗ templateId сначала, чтобы получить список шаблонов и smart-подсказку по истории клиента. Затем с templateId и fields (без confirm), чтобы получить filled/missing. Затем с confirm:true и полным набором fields, чтобы сохранить готовый черновик в ленту задачи.", parameters: { type: "object", properties: { num: { type: "number", description: "номер задачи CRM" }, templateId: { type: "string" }, fields: { type: "object", description: "известные значения плейсхолдеров шаблона, напр. {subject, amount, term}" }, confirm: { type: "boolean" } }, required: ["num"] } } },
 ];
 
 async function callTool(name, args, authHeaders) {
@@ -207,6 +215,63 @@ async function runAgent(messages, authHeaders) {
               await redis.set("task:" + Number(args.num), task);
               result = JSON.stringify({ ok: true, draft: task.aiDraft });
             } else result = JSON.stringify({ ok: false, error: "не удалось подготовить черновик" });
+          }
+        } catch (e) { result = JSON.stringify({ ok: false, error: String(e).slice(0, 200) }); }
+      } else if (tc.function.name === "draft_contract") {
+        try {
+          const num = Number(args.num);
+          const task = await redis.get("task:" + num);
+          if (!task) { result = JSON.stringify({ ok: false, error: "task not found" }); }
+          else {
+            const {
+              listTemplates, getTemplate, suggestTemplateForClient, autofillFromClient,
+              missingRequired, renderTemplate, nextContractNumber, recordTemplateUsage,
+            } = require("../lib/docTemplates.js");
+            let clientInfo = null;
+            try {
+              const cid = await redis.get("clientcompany:" + String(task.company || "").toLowerCase().replace(/[^a-zа-яё0-9]+/gi, " ").trim());
+              if (cid) clientInfo = await redis.get("client:" + cid);
+            } catch (e) { /* noop */ }
+
+            if (!args.templateId) {
+              const templates = await listTemplates(redis);
+              const suggested = await suggestTemplateForClient(redis, task.company);
+              result = JSON.stringify({
+                ok: true,
+                templates: templates.map((t) => ({ id: t.id, name: t.name, category: t.category, requiredFields: t.requiredFields })),
+                suggested,
+              });
+            } else {
+              const tpl = await getTemplate(redis, String(args.templateId));
+              if (!tpl) { result = JSON.stringify({ ok: false, error: "template not found" }); }
+              else {
+                const autofilled = autofillFromClient(clientInfo, null);
+                if (!autofilled.number) autofilled.number = await nextContractNumber(redis);
+                const fields = { ...autofilled, ...(args.fields || {}) };
+                const missing = missingRequired(tpl, fields);
+                if (args.confirm) {
+                  if (missing.length) {
+                    result = JSON.stringify({ ok: false, error: "нельзя завершить — есть незаполненные обязательные поля", missing });
+                  } else {
+                    const renderedText = renderTemplate(tpl.body, fields);
+                    task.thread = Array.isArray(task.thread) ? task.thread : [];
+                    task.thread.push({
+                      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                      at: new Date().toISOString(), from: "staff", by: "AI-агент",
+                      text: `📄 Черновик документа «${tpl.name}» (требует проверки бухгалтера/юриста перед отправкой контрагенту):\n\n${renderedText}`,
+                      fileIndex: null,
+                    });
+                    task.updatedAt = new Date().toISOString();
+                    await redis.set("task:" + num, task);
+                    await recordTemplateUsage(redis, task.company, tpl.id);
+                    await logEvent("doc_draft_created", { num, templateId: tpl.id, templateName: tpl.name, by: "AI-агент" });
+                    result = JSON.stringify({ ok: true, renderedText, savedToThread: true, templateName: tpl.name });
+                  }
+                } else {
+                  result = JSON.stringify({ ok: true, template: { id: tpl.id, name: tpl.name, requiredFields: tpl.requiredFields }, filled: fields, missing });
+                }
+              }
+            }
           }
         } catch (e) { result = JSON.stringify({ ok: false, error: String(e).slice(0, 200) }); }
       } else {
@@ -748,6 +813,10 @@ module.exports = async (req, res) => {
         const { listDocs } = require("../lib/rag.js");
         return res.status(200).json({ ok: true, docs: await listDocs(redis) });
       }
+      if (q.r === "doctpl_list") {
+        const { listTemplates } = require("../lib/docTemplates.js");
+        return res.status(200).json({ ok: true, templates: await listTemplates(redis) });
+      }
       return res.status(200).json({ ok: true, service: "Finpulse AI", routes: ["ping", "settings"] });
     }
 
@@ -803,6 +872,38 @@ module.exports = async (req, res) => {
         const { deleteDoc } = require("../lib/rag.js");
         await deleteDoc(redis, String(body.id));
         await logEvent("rag_doc_deleted", { id: body.id, by: actor });
+        return res.status(200).json({ ok: true });
+      }
+
+      if (body && body.action === "doctpl_add" && body.name && body.body) {
+        const { addTemplate } = require("../lib/docTemplates.js");
+        try {
+          const doc = await addTemplate(redis, {
+            name: body.name, category: body.category, body: body.body,
+            requiredFields: body.requiredFields, by: actor,
+          });
+          await logEvent("doctpl_added", { id: doc.id, name: doc.name, by: actor });
+          return res.status(200).json({ ok: true, template: doc });
+        } catch (e) {
+          return res.status(200).json({ ok: false, error: String(e).slice(0, 300) });
+        }
+      }
+      if (body && body.action === "doctpl_update" && body.id) {
+        const { updateTemplate } = require("../lib/docTemplates.js");
+        const patch = {};
+        if (body.name !== undefined) patch.name = body.name;
+        if (body.category !== undefined) patch.category = body.category;
+        if (body.body !== undefined) patch.body = body.body;
+        if (body.requiredFields !== undefined) patch.requiredFields = body.requiredFields;
+        const doc = await updateTemplate(redis, String(body.id), patch);
+        if (!doc) return res.status(200).json({ ok: false, error: "template not found" });
+        await logEvent("doctpl_updated", { id: doc.id, by: actor });
+        return res.status(200).json({ ok: true, template: doc });
+      }
+      if (body && body.action === "doctpl_delete" && body.id) {
+        const { deleteTemplate } = require("../lib/docTemplates.js");
+        await deleteTemplate(redis, String(body.id));
+        await logEvent("doctpl_deleted", { id: body.id, by: actor });
         return res.status(200).json({ ok: true });
       }
 
