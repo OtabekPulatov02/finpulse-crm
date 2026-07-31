@@ -111,12 +111,26 @@ async function askAiInGroup(ctx, query, msg, priorHistory) {
       ? `<i>🔧 ${r.steps.map((s) => escapeHtml(s.tool)).join(", ")}</i>\n\n`
       : "";
     const body = mdToTelegramHtml(r.reply || "(пустой ответ)");
-    const sent = await sendLong(ctx, `🤖 <b>ИИ-бухгалтер</b> (${escapeHtml(byName)}):\n${stepsLine}${body}`, { parse_mode: "HTML", reply_to_message_id: msg.message_id });
+    /* Если ИИ вызвал ask_user (например выбор шаблона документа/подтверждение
+       smart-подсказки) — показываем варианты кнопками, а не просто текстом,
+       чтобы не заставлять бухгалтера печатать название шаблона руками. Клик
+       по кнопке продолжает тот же диалог с полным контекстом (см.
+       aio:-хендлер ниже), как и обычный текстовый реплай. */
+    const newHistory = messages.concat([{ role: "assistant", content: r.reply || "" }]).slice(-20);
+    const options = Array.isArray(r.askOptions) ? r.askOptions.filter(Boolean) : [];
+    let replyMarkup;
+    if (options.length) {
+      const token = crypto.randomBytes(6).toString("hex");
+      try { await redis.set("aiopt:" + token, { history: newHistory, options }, { ex: 24 * 3600 }); } catch (e) { /* noop */ }
+      replyMarkup = { inline_keyboard: options.map((opt, i) => [{ text: String(opt).slice(0, 64), callback_data: `aio:${token}:${i}` }]) };
+    }
+    const sent = await sendLong(ctx, `🤖 <b>ИИ-бухгалтер</b> (${escapeHtml(byName)}):\n${stepsLine}${body}`, {
+      parse_mode: "HTML", reply_to_message_id: msg.message_id, ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+    });
     /* Сохраняем историю диалога под id только что отправленного сообщения —
        реплай НА ЛЮБОЕ сообщение ИИ (не только на карточки задач/уточнения)
        продолжает диалог с полным контекстом, а не начинает его заново. */
     if (sent && sent.message_id) {
-      const newHistory = messages.concat([{ role: "assistant", content: r.reply || "" }]).slice(-20);
       try { await redis.set("askconvo:" + sent.message_id, newHistory, { ex: 3 * 24 * 3600 }); } catch (e) { /* noop */ }
     }
     try { await redis.lpush("logs:crm", JSON.stringify({ ts: new Date().toISOString(), event: "ai_ask_group", by: byName, query: query.slice(0, 200) })); await redis.ltrim("logs:crm", 0, 499); } catch (e) { /* noop */ }
@@ -1066,6 +1080,27 @@ bot.callbackQuery(/^aiqb:(.+)$/, async (ctx) => {
     await ctx.editMessageReplyMarkup({ reply_markup: { inline_keyboard: [] } });
   } catch (e) { /* сообщение могло уже смениться — не критично */ }
   await triggerAutoWork(Number(rec.num), String(rec.value || ""), { kind: rec.kind || "generic", suggestions: rec.suggestions || [] });
+});
+
+/* Кнопка-вариант под ask_user ИИ-агента в общем чате группы (draft_contract,
+   выбор шаблона, любые уточнения через runAgent/askAiInGroup) — не привязана
+   к конкретной задаче/пайплайну execute_task, просто продолжает диалог с тем
+   же контекстом, как если бы бухгалтер ответил текстом (см. askAiInGroup). */
+bot.callbackQuery(/^aio:([a-f0-9]+):(\d+)$/, async (ctx) => {
+  const token = ctx.match[1];
+  const idx = Number(ctx.match[2]);
+  let rec = null;
+  try { rec = await redis.get("aiopt:" + token); } catch (e) { /* noop */ }
+  if (!rec || !Array.isArray(rec.options) || !rec.options[idx]) {
+    await ctx.answerCallbackQuery("Этот вопрос уже обработан или устарел.").catch(() => {});
+    return;
+  }
+  const chosen = String(rec.options[idx]);
+  try { await redis.del("aiopt:" + token); } catch (e) { /* noop */ }
+  await ctx.answerCallbackQuery(`Выбрано: ${chosen}`.slice(0, 200)).catch(() => {});
+  try { await ctx.editMessageReplyMarkup({ reply_markup: { inline_keyboard: [] } }); } catch (e) { /* сообщение могло уже смениться */ }
+  const msg = ctx.callbackQuery.message;
+  await askAiInGroup(ctx, chosen, msg, rec.history).catch((e) => console.error("askAiInGroup(aio):", String(e).slice(0, 200)));
 });
 
 /* Оценка качества AI-подсказки (👍/👎) под сообщением reportExecSuccess
