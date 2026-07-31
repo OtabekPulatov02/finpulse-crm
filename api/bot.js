@@ -515,8 +515,15 @@ const bot = new Bot(process.env.TELEGRAM_BOT_TOKEN);
    задвоенные сообщения в группе/клиенту. SETNX с недолгим TTL достаточно:
    повторная доставка происходит быстро (секунды-минуты), не часами позже. */
 bot.use(async (ctx, next) => {
+  /* Дедуп нужен только там, где повторная доставка реально опасна — на
+     обычных сообщениях (voice → Whisper, /ask и reply → до 55с агент).
+     Нажатия на инлайн-кнопки (callback_query) обрабатываются за доли
+     секунды и почти все либо идемпотентны, либо уже защищены отдельно
+     (например NPS — атомарный set-if-not-exists), так что не гонять на
+     них лишнюю запись в Redis на КАЖДЫЙ клик — при активном использовании
+     кнопок в задачах это была бы заметная доля всей нагрузки на Redis. */
   const updateId = ctx.update && ctx.update.update_id;
-  if (updateId != null) {
+  if (updateId != null && ctx.update.message) {
     try {
       const first = await redis.set("upd:" + updateId, 1, { nx: true, ex: 600 });
       if (first !== "OK" && first !== true) return; // уже обработан

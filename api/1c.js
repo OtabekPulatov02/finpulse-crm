@@ -147,11 +147,29 @@ function normCompany(str) {
 async function syncOrgs(appPath, appName, actor) {
   const res = await getOrgs(appPath);
   if (!res.ok) return res;
+  /* Раньше это был цикл с ДВУМЯ последовательными redis-командами (get+set,
+     иногда 3) НА КАЖДУЮ организацию — при синке по 10 базам 1С каждый час
+     (см. .github/workflows/hourly-1c-sync.yml) счёт шёл на тысячи команд
+     в Redis в час, что у Upstash считается по каждой команде отдельно и
+     упирается в лимиты тарифа. Теперь: один mget на все проверки
+     существования + один mset на все записи — вместо ~2N команд получаем
+     буквально 2 команды на весь список организаций одной базы. */
+  const orgs = res.orgs.map((org) => ({ org, norm: normCompany(org.name) })).filter((o) => o.norm);
+  const existingIds = orgs.length
+    ? await redis.mget(...orgs.map((o) => "clientcompany:" + o.norm))
+    : [];
+  const existingClientKeys = orgs
+    .map((o, i) => (existingIds[i] ? "client:" + existingIds[i] : null))
+    .filter(Boolean);
+  const existingClients = existingClientKeys.length ? await redis.mget(...existingClientKeys) : [];
+  const existingClientByKey = new Map(existingClientKeys.map((k, i) => [k, existingClients[i]]));
+
   let created = 0, updated = 0;
-  for (const org of res.orgs) {
-    const norm = normCompany(org.name);
-    if (!norm) continue;
-    const existingId = await redis.get("clientcompany:" + norm);
+  const writes = {};
+  const newClientIds = [];
+  for (let i = 0; i < orgs.length; i++) {
+    const { org, norm } = orgs[i];
+    const existingId = existingIds[i];
     const fields1c = {
       inn: org.inn || null,
       fullName: org.fullName || null,
@@ -163,27 +181,29 @@ async function syncOrgs(appPath, appName, actor) {
       vatCode: org.vatCode || null,
     };
     if (existingId) {
-      const c = (await redis.get("client:" + existingId)) || {};
+      const c = existingClientByKey.get("client:" + existingId) || {};
       const next = { ...c, updatedAt: new Date().toISOString(), source1c: { app: appPath, ref: org.ref, name: org.name } };
       for (const [k, v] of Object.entries(fields1c)) if (v != null) next[k] = v;
-      await redis.set("client:" + existingId, next);
+      writes["client:" + existingId] = next;
+      writes["1c:orgmap:" + norm] = { app: appPath, ref: org.ref, name: org.name };
       updated++;
-      await redis.set("1c:orgmap:" + norm, { app: appPath, ref: org.ref, name: org.name });
     } else {
-      const id = "c" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-      await redis.set("client:" + id, {
+      const id = "c" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6) + i;
+      writes["client:" + id] = {
         id, company: org.name, phone: null, telegramId: null,
         status: "active", tariff: null, assignedTo: null,
         ...fields1c,
         source1c: { app: appPath, ref: org.ref, name: org.name },
         createdAt: new Date().toISOString(),
-      });
-      await redis.set("clientcompany:" + norm, id);
-      await redis.sadd("clients", id);
-      await redis.set("1c:orgmap:" + norm, { app: appPath, ref: org.ref, name: org.name });
+      };
+      writes["clientcompany:" + norm] = id;
+      writes["1c:orgmap:" + norm] = { app: appPath, ref: org.ref, name: org.name };
+      newClientIds.push(id);
       created++;
     }
   }
+  if (Object.keys(writes).length) await redis.mset(writes);
+  if (newClientIds.length) await redis.sadd("clients", ...newClientIds);
   await logEvent("1c_sync_orgs", { app: appName, created, updated, total: res.orgs.length, by: actor || "CRM" });
   return { ok: true, created, updated, total: res.orgs.length };
 }
@@ -263,22 +283,29 @@ async function getCounterparties(appPath) {
 async function syncCounterparties(appPath, appName, actor) {
   const res = await getCounterparties(appPath);
   if (!res.ok) return res;
+  /* Было: до 2 redis.set() НА КАЖДОГО контрагента, последовательно — при
+     сотнях контрагентов на базу и синке каждый час по всем базам (см.
+     .github/workflows/hourly-1c-sync.yml) это тысячи Redis-команд в час,
+     а Upstash считает лимиты именно по числу команд. Теперь — один mset
+     на всех контрагентов сразу. */
   let count = 0;
   const light = [];
+  const writes = {};
   for (const cp of res.counterparties) {
     const norm = normCompany(cp.name);
     if (!norm) continue;
-    await redis.set("1c:cpmap:" + appPath + ":" + norm, { ref: cp.ref, name: cp.name, inn: cp.inn });
+    writes["1c:cpmap:" + appPath + ":" + norm] = { ref: cp.ref, name: cp.name, inn: cp.inn };
     /* ИНН — более надёжный идентификатор контрагента, чем название (не зависит от
        опечаток, сокращений "ООО/МЧЖ", падежей и т.п.) — кэшируем отдельно для точного
        поиска по ИНН перед тем, как вообще пробовать нечёткий поиск по имени. */
-    if (cp.inn) await redis.set("1c:cpinn:" + appPath + ":" + String(cp.inn).trim(), { ref: cp.ref, name: cp.name, inn: cp.inn });
+    if (cp.inn) writes["1c:cpinn:" + appPath + ":" + String(cp.inn).trim()] = { ref: cp.ref, name: cp.name, inn: cp.inn };
     light.push({ ref: cp.ref, name: cp.name, norm });
     count++;
   }
   /* лёгкий кэш всего списка (без doc/comment полей) — нужен только для нечёткого поиска,
      чтобы не делать дорогой перебор ключей Redis на каждый черновик */
-  await redis.set("1c:cplist:" + appPath, light);
+  writes["1c:cplist:" + appPath] = light;
+  if (Object.keys(writes).length) await redis.mset(writes);
   await logEvent("1c_sync_counterparties", { app: appName, count, by: actor || "CRM" });
   return { ok: true, total: res.counterparties.length, mapped: count };
 }
@@ -359,13 +386,17 @@ async function getNomenclature(appPath) {
 async function syncNomenclature(appPath, appName, actor) {
   const res = await getNomenclature(appPath);
   if (!res.ok) return res;
+  /* Батчим один mset вместо N последовательных redis.set() — см. комментарий
+     в syncCounterparties про лимиты Upstash на число команд при почасовом синке. */
   let count = 0;
+  const writes = {};
   for (const it of res.items) {
     const norm = normCompany(it.name);
     if (!norm) continue;
-    await redis.set("1c:nommap:" + appPath + ":" + norm, { ref: it.ref, name: it.name, unit: it.unit, vat: it.vat });
+    writes["1c:nommap:" + appPath + ":" + norm] = { ref: it.ref, name: it.name, unit: it.unit, vat: it.vat };
     count++;
   }
+  if (Object.keys(writes).length) await redis.mset(writes);
   await logEvent("1c_sync_nomenclature", { app: appName, count, by: actor || "CRM" });
   return { ok: true, total: res.items.length, mapped: count };
 }
@@ -394,11 +425,14 @@ async function getContracts(appPath) {
 async function syncContracts(appPath, appName, actor) {
   const res = await getContracts(appPath);
   if (!res.ok) return res;
+  /* Батчим оба прохода в один mset — раньше было до 2 redis.set() на
+     каждый договор, последовательно (см. комментарий в syncCounterparties). */
   const perOwner = new Map();
+  const writes = {};
   for (const ct of res.contracts) {
     if (!ct.owner) continue;
     const norm = normCompany(ct.name);
-    if (norm) await redis.set("1c:ctmap:" + appPath + ":" + ct.owner + ":" + norm, { ref: ct.ref, name: ct.name });
+    if (norm) writes["1c:ctmap:" + appPath + ":" + ct.owner + ":" + norm] = { ref: ct.ref, name: ct.name };
     if (!perOwner.has(ct.owner)) perOwner.set(ct.owner, []);
     perOwner.get(ct.owner).push(ct.ref);
   }
@@ -407,10 +441,11 @@ async function syncContracts(appPath, appName, actor) {
     /* если у контрагента ровно один договор — используем его по умолчанию,
        когда AI-черновик не называет договор явно */
     if (refs.length === 1) {
-      await redis.set("1c:ctdefault:" + appPath + ":" + owner, refs[0]);
+      writes["1c:ctdefault:" + appPath + ":" + owner] = refs[0];
       count++;
     }
   }
+  if (Object.keys(writes).length) await redis.mset(writes);
   await logEvent("1c_sync_contracts", { app: appName, count: res.contracts.length, defaults: count, by: actor || "CRM" });
   return { ok: true, total: res.contracts.length, owners: perOwner.size, defaults: count };
 }
@@ -456,13 +491,17 @@ function surnameFirstNameKey(normalizedFullName) {
 async function syncEmployees(appPath, appName, actor) {
   const res = await getEmployees(appPath);
   if (!res.ok) return res;
+  /* Батчим все записи (по сотруднику + по индексу фамилия+имя + light-список)
+     в один mset вместо N+M последовательных redis.set() (см. комментарий в
+     syncCounterparties про лимиты Upstash на число команд). */
   let count = 0;
   const light = [];
   const byKey2 = new Map();
+  const writes = {};
   for (const e of res.employees) {
     const norm = normCompany(e.name);
     if (!norm) continue;
-    await redis.set("1c:empmap:" + appPath + ":" + norm, { ref: e.ref, name: e.name, individualRef: e.individualRef });
+    writes["1c:empmap:" + appPath + ":" + norm] = { ref: e.ref, name: e.name, individualRef: e.individualRef };
     light.push({ ref: e.ref, name: e.name, norm });
     const key2 = surnameFirstNameKey(norm);
     if (key2) {
@@ -471,11 +510,12 @@ async function syncEmployees(appPath, appName, actor) {
     }
     count++;
   }
-  await redis.set("1c:emplist:" + appPath, light);
+  writes["1c:emplist:" + appPath] = light;
   /* индекс "фамилия+имя" -> список сотрудников (обычно один, но не всегда) */
   for (const [key2, list] of byKey2) {
-    await redis.set("1c:empkey2:" + appPath + ":" + key2, list);
+    writes["1c:empkey2:" + appPath + ":" + key2] = list;
   }
+  if (Object.keys(writes).length) await redis.mset(writes);
   await logEvent("1c_sync_employees", { app: appName, count, by: actor || "CRM" });
   return { ok: true, total: res.employees.length, mapped: count };
 }
@@ -528,14 +568,16 @@ async function syncPositions(appPath, appName, actor) {
   if (!res.ok) return res;
   let count = 0;
   const light = [];
+  const writes = {};
   for (const p of res.positions) {
     const norm = normCompany(p.name);
     if (!norm) continue;
-    await redis.set("1c:posmap:" + appPath + ":" + norm, { ref: p.ref, name: p.name });
+    writes["1c:posmap:" + appPath + ":" + norm] = { ref: p.ref, name: p.name };
     light.push({ ref: p.ref, name: p.name, norm });
     count++;
   }
-  await redis.set("1c:poslist:" + appPath, light);
+  writes["1c:poslist:" + appPath] = light;
+  if (Object.keys(writes).length) await redis.mset(writes);
   await logEvent("1c_sync_positions", { app: appName, count, by: actor || "CRM" });
   return { ok: true, total: res.positions.length, mapped: count };
 }
@@ -572,14 +614,16 @@ async function syncDepartments(appPath, appName, actor) {
   if (!res.ok) return res;
   let count = 0;
   const light = [];
+  const writes = {};
   for (const d of res.departments) {
     const norm = normCompany(d.name);
     if (!norm) continue;
-    await redis.set("1c:deptmap:" + appPath + ":" + norm, { ref: d.ref, name: d.name });
+    writes["1c:deptmap:" + appPath + ":" + norm] = { ref: d.ref, name: d.name };
     light.push({ ref: d.ref, name: d.name, norm });
     count++;
   }
-  await redis.set("1c:deptlist:" + appPath, light);
+  writes["1c:deptlist:" + appPath] = light;
+  if (Object.keys(writes).length) await redis.mset(writes);
   await logEvent("1c_sync_departments", { app: appName, count, by: actor || "CRM" });
   return { ok: true, total: res.departments.length, mapped: count };
 }
